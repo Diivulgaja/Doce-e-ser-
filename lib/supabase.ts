@@ -6,8 +6,8 @@ function env(name: string) {
   return value;
 }
 
-function supabaseUrl() {
-  const raw = env("NEXT_PUBLIC_SUPABASE_URL").trim();
+function normalizeSupabaseUrl(rawValue: string) {
+  const raw = rawValue.trim();
   let parsed: URL;
 
   try {
@@ -23,6 +23,10 @@ function supabaseUrl() {
   }
 
   return parsed.origin;
+}
+
+function supabaseUrl() {
+  return normalizeSupabaseUrl(env("NEXT_PUBLIC_SUPABASE_URL"));
 }
 
 export function getSupabaseAdmin() {
@@ -41,7 +45,7 @@ export function getSupabaseBrowser() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !key) return null;
-  return createClient(supabaseUrl(), key);
+  return createClient(normalizeSupabaseUrl(url), key);
 }
 
 export async function requireAdmin(request: Request) {
