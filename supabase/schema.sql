@@ -188,4 +188,16 @@ on conflict (id) do update set public = true, file_size_limit = 8000000;
 drop policy if exists "public product images" on storage.objects;
 create policy "public product images" on storage.objects for select to public using (bucket_id = 'product-images');
 
-alter publication supabase_realtime add table public.orders;
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'orders'
+  ) then
+    alter publication supabase_realtime add table public.orders;
+  end if;
+end
+$$;

@@ -12,6 +12,12 @@ export function getSupabaseAdmin() {
   });
 }
 
+export function getSupabasePublic() {
+  return createClient(env("NEXT_PUBLIC_SUPABASE_URL"), env("NEXT_PUBLIC_SUPABASE_ANON_KEY"), {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+}
+
 export function getSupabaseBrowser() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
