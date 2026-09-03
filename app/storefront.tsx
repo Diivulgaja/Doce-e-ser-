@@ -1,0 +1,166 @@
+"use client";
+
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import Image from "next/image";
+import Link from "next/link";
+import { AtSign, Check, ChevronRight, Clock3, MapPin, Minus, Plus, Search, ShoppingBag, Sparkles, Store, Trash2 } from "lucide-react";
+import { toast } from "sonner";
+import ProductImage from "@/components/product-image";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Toaster } from "@/components/ui/sonner";
+import type { Catalog, Order, Product, ProductOption } from "@/lib/types";
+
+type CartLine = { product: Product; quantity: number; selectedOptions: string[]; notes: string };
+const money = (value: number) => new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value);
+const statusLabels: Record<string, string> = { received: "Pedido recebido", confirmed: "Confirmado", preparing: "Em preparação", ready: "Pronto para retirada", picked_up: "Retirado", cancelled: "Cancelado" };
+
+export default function Storefront() {
+  const [catalog, setCatalog] = useState<Catalog | null>(null);
+  const [category, setCategory] = useState("todos");
+  const [query, setQuery] = useState("");
+  const [cart, setCart] = useState<CartLine[]>([]);
+  const [cartOpen, setCartOpen] = useState(false);
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [selectedOptions, setSelectedOptions] = useState<string[]>([]);
+  const [productNotes, setProductNotes] = useState("");
+  const [checkout, setCheckout] = useState(false);
+  const [confirmation, setConfirmation] = useState<Order | null>(null);
+  const [tracking, setTracking] = useState(false);
+  const [trackedOrder, setTrackedOrder] = useState<Order | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch("/api/catalog").then((response) => response.json()).then((data) => {
+      if (data.error) throw new Error(data.error);
+      setCatalog(data);
+    }).catch(() => toast.error("Não foi possível carregar o cardápio agora.")).finally(() => setLoading(false));
+    if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => undefined);
+  }, []);
+
+  const visibleProducts = useMemo(() => (catalog?.products ?? []).filter((product) => {
+    const matchesCategory = category === "todos" || String(product.categoryId) === category;
+    const matchesQuery = product.name.toLowerCase().includes(query.toLowerCase());
+    return product.active && matchesCategory && matchesQuery;
+  }), [catalog, category, query]);
+  const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
+  const total = cart.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
+
+  function openProduct(product: Product) {
+    setSelectedProduct(product);
+    setSelectedOptions([]);
+    setProductNotes("");
+  }
+
+  function addSelectedProduct() {
+    if (!selectedProduct) return;
+    const options: ProductOption[] = JSON.parse(selectedProduct.optionsJson || "[]");
+    if (selectedOptions.length < options.length) return toast.error("Escolha todas as opções do produto.");
+    setCart((current) => [...current, { product: selectedProduct, quantity: 1, selectedOptions, notes: productNotes }]);
+    setSelectedProduct(null);
+    setCartOpen(true);
+    toast.success("Produto adicionado ao carrinho.");
+  }
+
+  function updateQuantity(index: number, amount: number) {
+    setCart((current) => current.flatMap((item, itemIndex) => itemIndex === index ? (item.quantity + amount > 0 ? [{ ...item, quantity: item.quantity + amount }] : []) : [item]));
+  }
+
+  if (loading) return <main className="grid min-h-screen place-items-center bg-[#fbf7f0]"><div className="text-center"><Image src="/assets/logo-doce-e-ser.png" alt="Doce é Ser" width={112} height={112} className="mx-auto rounded-full" /><p className="mt-4 text-[#7a5d49]">Preparando o cardápio…</p></div></main>;
+  if (!catalog) return <main className="grid min-h-screen place-items-center bg-[#fbf7f0] p-6 text-center"><p>O cardápio está temporariamente indisponível.</p></main>;
+
+  const settings = catalog.settings;
+  return (
+    <div className="min-h-screen bg-[#fbf7f0] text-[#3c2419]">
+      <Toaster position="top-center" richColors />
+      <header className="sticky top-0 z-40 border-b border-[#6a3d24]/10 bg-[#fbf7f0]/95 backdrop-blur">
+        <div className="mx-auto flex h-20 max-w-7xl items-center gap-5 px-4 sm:px-6">
+          <a href="#inicio" className="flex items-center gap-3"><Image src="/assets/logo-doce-e-ser.png" width={52} height={52} alt="Doce é Ser" className="rounded-full shadow-sm" /><span className="hidden font-serif text-xl font-semibold sm:inline">Doce é Ser</span></a>
+          <nav className="ml-auto hidden items-center gap-6 text-sm font-medium lg:flex">
+            <a href="#inicio">Início</a><a href="#cardapio">Cardápio</a><button onClick={() => setTracking(true)}>Meus pedidos</button><a href="#loja">Informações da loja</a><Link href="/admin" className="text-[#8b674e]">Painel</Link>
+          </nav>
+          <Button onClick={() => setCartOpen(true)} className="ml-auto h-11 rounded-full bg-[#5b2c16] px-4 text-[#fff8ed] hover:bg-[#472110] lg:ml-2"><ShoppingBag /> <span className="hidden sm:inline">Carrinho</span><span className="grid size-6 place-items-center rounded-full bg-[#f4d5a6] text-xs text-[#5b2c16]">{cartCount}</span></Button>
+        </div>
+      </header>
+
+      <main>
+        <section id="inicio" className="relative overflow-hidden border-b border-[#6a3d24]/10">
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_90%_10%,#eed3aa_0,transparent_35%),radial-gradient(circle_at_10%_90%,#ead8c3_0,transparent_28%)]" />
+          <div className="relative mx-auto grid max-w-7xl items-center gap-10 px-4 py-12 sm:px-6 sm:py-16 lg:grid-cols-[1fr_.82fr] lg:py-24">
+            <div>
+              <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-[#be9b73]/40 bg-white/55 px-3 py-2 text-sm text-[#75513b]"><Store className="size-4" /> Pedidos somente para retirada</div>
+              <h1 className="max-w-3xl font-serif text-5xl leading-[.98] tracking-[-.035em] text-[#4e2715] sm:text-7xl">Um doce momento para chamar de seu.</h1>
+              <p className="mt-6 max-w-xl text-lg leading-8 text-[#765846]">Doces e bolos artesanais, preparados com carinho para você retirar na nossa loja.</p>
+              <div className="mt-8 flex flex-wrap gap-3"><Button asChild size="lg" className="h-13 rounded-full bg-[#5b2c16] px-7 text-base text-[#fff8ed] hover:bg-[#472110]"><a href="#cardapio">Ver cardápio <ChevronRight /></a></Button><Button variant="outline" size="lg" onClick={() => setTracking(true)} className="h-13 rounded-full border-[#8b674e]/35 bg-white/60 px-7 text-base">Acompanhar pedido</Button></div>
+            </div>
+            <div className="relative mx-auto aspect-square w-full max-w-[470px] overflow-hidden rounded-[2.5rem] border-8 border-white/60 shadow-2xl shadow-[#6b3a20]/15"><ProductImage src="sprite:0" alt="Fatia de bolo de chocolate" className="absolute inset-0 h-full w-full" /><div className="absolute bottom-4 left-4 right-4 rounded-2xl bg-[#fffaf4]/90 p-4 backdrop-blur"><p className="text-xs font-semibold uppercase tracking-[.18em] text-[#9b6f4f]">Feito artesanalmente</p><p className="mt-1 font-serif text-xl">Chocolate, afeto e bons ingredientes.</p></div></div>
+          </div>
+        </section>
+
+        <section id="cardapio" className="mx-auto max-w-7xl px-4 py-14 sm:px-6 sm:py-20">
+          <div className="flex flex-col justify-between gap-5 md:flex-row md:items-end"><div><p className="text-sm font-semibold uppercase tracking-[.2em] text-[#a16e48]">Escolha o seu</p><h2 className="mt-2 font-serif text-4xl sm:text-5xl">Nosso cardápio</h2></div><label className="flex h-12 items-center gap-3 rounded-full border border-[#6a3d24]/15 bg-white px-4 shadow-sm md:w-80"><Search className="size-5 text-[#9a7d68]" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar no cardápio" className="w-full bg-transparent outline-none" /></label></div>
+          <div className="scrollbar-none -mx-4 mt-8 flex gap-2 overflow-x-auto px-4 pb-2 sm:mx-0 sm:px-0">
+            <button onClick={() => setCategory("todos")} className={`whitespace-nowrap rounded-full px-5 py-3 text-sm font-semibold transition ${category === "todos" ? "bg-[#5b2c16] text-white" : "border border-[#6a3d24]/15 bg-white"}`}>Todos</button>
+            {catalog.categories.filter((item) => item.active).map((item) => <button key={item.id} onClick={() => setCategory(String(item.id))} className={`whitespace-nowrap rounded-full px-5 py-3 text-sm font-semibold transition ${category === String(item.id) ? "bg-[#5b2c16] text-white" : "border border-[#6a3d24]/15 bg-white"}`}>{item.name}</button>)}
+          </div>
+          <div className="mt-8 grid grid-cols-2 gap-3 sm:gap-5 lg:grid-cols-3 xl:grid-cols-4">
+            {visibleProducts.map((product) => <article key={product.id} className="group overflow-hidden rounded-3xl border border-[#6a3d24]/10 bg-white shadow-[0_10px_40px_rgba(79,41,22,.06)]"><button onClick={() => openProduct(product)} className="block w-full text-left"><ProductImage src={product.imageUrl} alt={product.name} className="aspect-[1.08] w-full transition duration-500 group-hover:scale-[1.02]" /><div className="p-4 sm:p-5">{product.featured && <span className="mb-2 inline-flex items-center gap-1 text-xs font-semibold uppercase tracking-[.12em] text-[#a16e48]"><Sparkles className="size-3" /> Destaque</span>}<h3 className="font-serif text-xl leading-tight sm:text-2xl">{product.name}</h3><p className="mt-2 line-clamp-2 text-sm leading-6 text-[#7a6252]">{product.description}</p><div className="mt-4 flex items-center justify-between gap-2"><strong className="text-lg">{money(product.price)}</strong>{product.soldOut ? <span className="rounded-full bg-[#eee6dc] px-3 py-2 text-xs font-semibold text-[#8f7664]">Esgotado</span> : <span className="grid size-10 place-items-center rounded-full bg-[#5b2c16] text-white"><Plus className="size-5" /></span>}</div></div></button></article>)}
+          </div>
+          {!visibleProducts.length && <div className="mt-8 rounded-3xl border border-dashed border-[#6a3d24]/25 p-10 text-center text-[#806b5d]">Nenhum doce encontrado nessa categoria.</div>}
+        </section>
+
+        <section id="loja" className="bg-[#5b2c16] text-[#fff8ed]"><div className="mx-auto grid max-w-7xl gap-10 px-4 py-14 sm:px-6 md:grid-cols-2 md:py-20"><div><p className="text-sm font-semibold uppercase tracking-[.2em] text-[#e8bd80]">Retire com tranquilidade</p><h2 className="mt-3 font-serif text-4xl">Sua encomenda espera por você.</h2><p className="mt-5 max-w-lg leading-7 text-[#eadbce]">Não realizamos entregas. Escolha o melhor horário no checkout e retire seu pedido fresquinho na loja.</p></div><div className="grid gap-4"><div className="flex gap-4 rounded-2xl bg-white/8 p-4"><MapPin className="mt-1 shrink-0 text-[#e8bd80]" /><div><strong>Endereço</strong><p className="mt-1 text-[#eadbce]">{settings.address}</p></div></div><div className="flex gap-4 rounded-2xl bg-white/8 p-4"><Clock3 className="mt-1 shrink-0 text-[#e8bd80]" /><div><strong>Horário de retirada</strong><p className="mt-1 text-[#eadbce]">Das {settings.openTime} às {settings.closeTime}, conforme disponibilidade</p></div></div><div className="flex gap-4 rounded-2xl bg-white/8 p-4"><AtSign className="mt-1 shrink-0 text-[#e8bd80]" /><div><strong>Fale com a gente</strong><p className="mt-1 text-[#eadbce]">{settings.phone} · {settings.instagram}</p></div></div></div></div></section>
+      </main>
+
+      <footer className="bg-[#35170b] px-4 py-7 text-center text-sm text-[#d9c5b7]">© {new Date().getFullYear()} Doce é Ser · Doceria & Confeitaria · Somente retirada na loja</footer>
+      <a href={`https://wa.me/${settings.whatsapp.replace(/\D/g, "")}`} target="_blank" rel="noreferrer" aria-label="Falar com a Doce é Ser pelo WhatsApp" className="fixed bottom-5 left-5 z-30 grid size-14 place-items-center rounded-full bg-[#1fa855] text-lg font-bold text-white shadow-lg">W</a>
+
+      <Dialog open={!!selectedProduct} onOpenChange={(open) => !open && setSelectedProduct(null)}>
+        <DialogContent className="max-h-[92vh] overflow-y-auto rounded-3xl border-[#6a3d24]/15 bg-[#fffaf4] p-0 sm:max-w-2xl">
+          {selectedProduct && <><ProductImage src={selectedProduct.imageUrl} alt={selectedProduct.name} className="aspect-[16/8] w-full rounded-t-3xl" /><div className="space-y-5 p-6"><DialogHeader><DialogTitle className="font-serif text-3xl">{selectedProduct.name}</DialogTitle><DialogDescription className="text-base leading-7 text-[#7a6252]">{selectedProduct.description}</DialogDescription></DialogHeader>{(JSON.parse(selectedProduct.optionsJson || "[]") as ProductOption[]).map((option, index) => <fieldset key={option.name}><legend className="mb-2 font-semibold">{option.name}</legend><div className="flex flex-wrap gap-2">{option.values.map((value) => <button key={value} onClick={() => setSelectedOptions((current) => { const next = [...current]; next[index] = `${option.name}: ${value}`; return next; })} className={`rounded-full border px-4 py-2 text-sm ${selectedOptions[index] === `${option.name}: ${value}` ? "border-[#5b2c16] bg-[#5b2c16] text-white" : "border-[#6a3d24]/20 bg-white"}`}>{value}</button>)}</div></fieldset>)}<div><Label htmlFor="product-notes">Observações</Label><textarea id="product-notes" value={productNotes} onChange={(event) => setProductNotes(event.target.value)} placeholder="Ex.: sem granulado" className="mt-2 min-h-20 w-full rounded-2xl border border-[#6a3d24]/15 bg-white p-3 outline-none focus:ring-2 focus:ring-[#8b5d3d]/30" /></div><Button onClick={addSelectedProduct} disabled={selectedProduct.soldOut} className="h-13 w-full rounded-full bg-[#5b2c16] text-base text-white hover:bg-[#472110]">{selectedProduct.soldOut ? "Produto esgotado" : `Adicionar · ${money(selectedProduct.price)}`}</Button></div></>}
+        </DialogContent>
+      </Dialog>
+
+      <Sheet open={cartOpen} onOpenChange={setCartOpen}><SheetContent className="w-full max-w-lg border-[#6a3d24]/15 bg-[#fffaf4] sm:max-w-lg"><SheetHeader><SheetTitle className="font-serif text-3xl">Seu carrinho</SheetTitle><SheetDescription>Seu pedido será retirado presencialmente.</SheetDescription></SheetHeader><div className="flex-1 overflow-y-auto px-4">{!cart.length ? <div className="grid h-full place-items-center py-12 text-center text-[#806b5d]"><div><ShoppingBag className="mx-auto mb-4 size-12 opacity-40" /><p>Seu carrinho ainda está vazio.</p></div></div> : <div className="space-y-3">{cart.map((item, index) => <div key={`${item.product.id}-${index}`} className="flex gap-3 rounded-2xl border border-[#6a3d24]/10 bg-white p-3"><ProductImage src={item.product.imageUrl} alt={item.product.name} className="size-20 shrink-0 rounded-xl" /><div className="min-w-0 flex-1"><h3 className="font-semibold">{item.product.name}</h3><p className="truncate text-xs text-[#806b5d]">{item.selectedOptions.join(" · ")}</p><div className="mt-2 flex items-center justify-between"><strong>{money(item.product.price * item.quantity)}</strong><div className="flex items-center gap-2"><button aria-label="Diminuir" onClick={() => updateQuantity(index, -1)} className="grid size-8 place-items-center rounded-full border"><Minus className="size-4" /></button><span>{item.quantity}</span><button aria-label="Aumentar" onClick={() => updateQuantity(index, 1)} className="grid size-8 place-items-center rounded-full border"><Plus className="size-4" /></button></div></div></div><button aria-label="Excluir" onClick={() => setCart((current) => current.filter((_, i) => i !== index))} className="self-start text-[#9b7b68]"><Trash2 className="size-4" /></button></div>)}</div>}</div>{cart.length > 0 && <div className="border-t border-[#6a3d24]/10 p-4"><div className="mb-4 rounded-2xl bg-[#f2e4d2] p-3 text-sm font-medium text-[#63351e]">Pedidos disponíveis somente para retirada na loja. Não realizamos entregas.</div><div className="mb-4 flex items-center justify-between text-lg"><span>Total</span><strong>{money(total)}</strong></div><Button onClick={() => { setCartOpen(false); setCheckout(true); }} className="h-13 w-full rounded-full bg-[#5b2c16] text-base text-white">Escolher retirada</Button></div>}</SheetContent></Sheet>
+
+      <CheckoutDialog open={checkout} onOpenChange={setCheckout} cart={cart} settings={settings} total={total} onConfirmed={(order) => { setCart([]); setCheckout(false); setConfirmation(order); }} />
+      <ConfirmationDialog order={confirmation} settings={settings} onClose={() => setConfirmation(null)} />
+      <TrackingDialog open={tracking} onOpenChange={setTracking} order={trackedOrder} onOrder={setTrackedOrder} />
+    </div>
+  );
+}
+
+function CheckoutDialog({ open, onOpenChange, cart, settings, total, onConfirmed }: { open: boolean; onOpenChange: (open: boolean) => void; cart: CartLine[]; settings: Catalog["settings"]; total: number; onConfirmed: (order: Order) => void }) {
+  const [submitting, setSubmitting] = useState(false);
+  const slots = useMemo(() => {
+    const result: string[] = [];
+    const [openHour, openMinute] = settings.openTime.split(":").map(Number);
+    const [closeHour, closeMinute] = settings.closeTime.split(":").map(Number);
+    for (let minutes = openHour * 60 + openMinute; minutes < closeHour * 60 + closeMinute; minutes += settings.intervalMinutes) result.push(`${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`);
+    return result;
+  }, [settings]);
+  const minDate = new Date(Date.now() + settings.prepMinutes * 60_000).toISOString().slice(0, 10);
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setSubmitting(true);
+    const form = new FormData(event.currentTarget);
+    try {
+      const response = await fetch("/api/orders", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ customerName: form.get("name"), phone: form.get("phone"), pickupDate: form.get("date"), pickupTime: form.get("time"), notes: form.get("notes"), paymentMethod: form.get("payment"), items: cart.map((item) => ({ productId: item.product.id, quantity: item.quantity, selectedOptions: item.selectedOptions, notes: item.notes })) }) });
+      const data = await response.json(); if (!response.ok) throw new Error(data.error);
+      onConfirmed(data.order);
+    } catch (error) { toast.error(error instanceof Error ? error.message : "Não foi possível finalizar."); } finally { setSubmitting(false); }
+  }
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="max-h-[94vh] overflow-y-auto rounded-3xl bg-[#fffaf4] sm:max-w-2xl"><DialogHeader><DialogTitle className="font-serif text-3xl">Finalizar pedido</DialogTitle><DialogDescription>Escolha quando você virá retirar na Doce é Ser.</DialogDescription></DialogHeader><form onSubmit={submit} className="grid gap-4 sm:grid-cols-2"><div className="sm:col-span-2 rounded-2xl bg-[#f2e4d2] p-3 text-sm font-semibold text-[#63351e]">Somente retirada na loja · não solicitamos endereço.</div><label className="grid gap-2"><span className="font-medium">Nome completo</span><Input name="name" required minLength={3} className="h-12 bg-white" /></label><label className="grid gap-2"><span className="font-medium">Telefone / WhatsApp</span><Input name="phone" required minLength={8} className="h-12 bg-white" /></label><label className="grid gap-2"><span className="font-medium">Data de retirada</span><Input type="date" name="date" min={minDate} required className="h-12 bg-white" /></label><label className="grid gap-2"><span className="font-medium">Horário</span><select name="time" required defaultValue="" className="h-12 rounded-md border bg-white px-3"><option value="" disabled>Selecione</option>{slots.map((slot) => <option key={slot}>{slot}</option>)}</select></label><label className="grid gap-2 sm:col-span-2"><span className="font-medium">Pagamento</span><select name="payment" className="h-12 rounded-md border bg-white px-3">{(JSON.parse(settings.paymentMethodsJson || "[]") as string[]).map((method) => <option key={method}>{method}</option>)}</select><small className="text-[#806b5d]">Pagamento realizado na retirada.</small></label><label className="grid gap-2 sm:col-span-2"><span className="font-medium">Observações</span><textarea name="notes" className="min-h-20 rounded-xl border bg-white p-3" placeholder="Algo que precisamos saber?" /></label><div className="sm:col-span-2 rounded-2xl border p-4"><div className="flex items-center justify-between"><span>{cart.reduce((sum, item) => sum + item.quantity, 0)} itens</span><strong className="text-lg">{money(total)}</strong></div></div><Button disabled={submitting} className="h-13 rounded-full bg-[#5b2c16] text-base text-white sm:col-span-2">{submitting ? "Enviando pedido…" : "Confirmar pedido para retirada"}</Button></form></DialogContent></Dialog>;
+}
+
+function ConfirmationDialog({ order, settings, onClose }: { order: Order | null; settings: Catalog["settings"]; onClose: () => void }) {
+  return <Dialog open={!!order} onOpenChange={(open) => !open && onClose()}><DialogContent className="rounded-3xl bg-[#fffaf4] text-center sm:max-w-lg">{order && <><div className="mx-auto grid size-16 place-items-center rounded-full bg-[#dcebd8] text-[#2d6428]"><Check className="size-8" /></div><DialogHeader><DialogTitle className="text-center font-serif text-3xl">Pedido #{order.orderNumber}</DialogTitle><DialogDescription className="text-center text-base leading-7">Pedido recebido! Estamos preparando tudo com carinho. Retire seu pedido na Doce é Ser no horário escolhido.</DialogDescription></DialogHeader><div className="rounded-2xl bg-white p-4 text-left"><p><strong>Retirada:</strong> {new Date(`${order.pickupDate}T12:00:00`).toLocaleDateString("pt-BR")} às {order.pickupTime}</p><p className="mt-2"><strong>Pagamento:</strong> {order.paymentMethod} na retirada</p><p className="mt-2"><strong>Total:</strong> {money(order.total)}</p><p className="mt-2"><strong>Local:</strong> {settings.address}</p></div><a href={`https://wa.me/${settings.whatsapp.replace(/\D/g, "")}`} target="_blank" rel="noreferrer"><Button className="w-full rounded-full bg-[#1f9d55] text-white">Falar com a Doce é Ser pelo WhatsApp</Button></a></>}</DialogContent></Dialog>;
+}
+
+function TrackingDialog({ open, onOpenChange, order, onOrder }: { open: boolean; onOpenChange: (open: boolean) => void; order: Order | null; onOrder: (order: Order | null) => void }) {
+  async function track(event: FormEvent<HTMLFormElement>) { event.preventDefault(); const form = new FormData(event.currentTarget); const response = await fetch(`/api/orders?number=${encodeURIComponent(String(form.get("number")))}&phone=${encodeURIComponent(String(form.get("phone")))}`); const data = await response.json(); if (!response.ok) return toast.error(data.error); onOrder(data.order); }
+  const stages = ["received", "confirmed", "preparing", "ready", "picked_up"];
+  return <Dialog open={open} onOpenChange={(value) => { onOpenChange(value); if (!value) onOrder(null); }}><DialogContent className="rounded-3xl bg-[#fffaf4] sm:max-w-lg"><DialogHeader><DialogTitle className="font-serif text-3xl">Meus pedidos</DialogTitle><DialogDescription>Acompanhe usando o telefone e o número do pedido.</DialogDescription></DialogHeader>{!order ? <form onSubmit={track} className="space-y-4"><label className="grid gap-2"><span>Número do pedido</span><Input name="number" placeholder="Ex.: 1024" required /></label><label className="grid gap-2"><span>Telefone / WhatsApp</span><Input name="phone" required /></label><Button className="h-12 w-full rounded-full bg-[#5b2c16] text-white">Consultar pedido</Button></form> : <div><div className="rounded-2xl bg-white p-4"><p className="text-sm text-[#806b5d]">Pedido #{order.orderNumber}</p><p className="mt-1 font-serif text-2xl">{statusLabels[order.status]}</p><p className="mt-2 text-sm">Retirada em {new Date(`${order.pickupDate}T12:00:00`).toLocaleDateString("pt-BR")} às {order.pickupTime}</p></div>{order.status !== "cancelled" && <div className="mt-5 flex justify-between">{stages.map((stage, index) => { const active = index <= stages.indexOf(order.status); return <div key={stage} className="flex flex-1 flex-col items-center"><span className={`grid size-8 place-items-center rounded-full ${active ? "bg-[#5b2c16] text-white" : "bg-[#e9ddd2] text-[#9c8779]"}`}>{active ? <Check className="size-4" /> : index + 1}</span>{index < stages.length - 1 && <span />}</div>; })}</div>}<Button variant="outline" onClick={() => onOrder(null)} className="mt-6 w-full rounded-full">Consultar outro pedido</Button></div>}</DialogContent></Dialog>;
+}

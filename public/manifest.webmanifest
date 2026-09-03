@@ -1,0 +1,10 @@
+{
+  "name": "Doce é Ser",
+  "short_name": "Doce é Ser",
+  "description": "Pedidos para retirada na Doce é Ser",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#fbf7f0",
+  "theme_color": "#5b2c16",
+  "icons": [{ "src": "/assets/logo-doce-e-ser.png", "sizes": "768x768", "type": "image/png", "purpose": "any maskable" }]
+}
