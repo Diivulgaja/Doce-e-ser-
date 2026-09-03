@@ -28,7 +28,7 @@ export async function GET() {
     const diagnostic = describeSupabaseError(error);
     console.error("Falha ao carregar o cardápio:", diagnostic);
     return Response.json(
-      { error: "Não foi possível carregar o cardápio.", diagnostic },
+      { error: "Não foi possível carregar o cardápio." },
       { status: 500 },
     );
   }
