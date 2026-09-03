@@ -6,14 +6,33 @@ function env(name: string) {
   return value;
 }
 
+function supabaseUrl() {
+  const raw = env("NEXT_PUBLIC_SUPABASE_URL").trim();
+  let parsed: URL;
+
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error("A variável NEXT_PUBLIC_SUPABASE_URL não contém uma URL válida.");
+  }
+
+  // Aceita por engano tanto a URL REST quanto o link do painel do projeto.
+  const dashboardProject = parsed.pathname.match(/\/project\/([a-z0-9]+)/i)?.[1];
+  if (dashboardProject && (parsed.hostname === "supabase.com" || parsed.hostname === "www.supabase.com")) {
+    return `https://${dashboardProject}.supabase.co`;
+  }
+
+  return parsed.origin;
+}
+
 export function getSupabaseAdmin() {
-  return createClient(env("NEXT_PUBLIC_SUPABASE_URL"), env("SUPABASE_SERVICE_ROLE_KEY"), {
+  return createClient(supabaseUrl(), env("SUPABASE_SERVICE_ROLE_KEY"), {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 }
 
 export function getSupabasePublic() {
-  return createClient(env("NEXT_PUBLIC_SUPABASE_URL"), env("NEXT_PUBLIC_SUPABASE_ANON_KEY"), {
+  return createClient(supabaseUrl(), env("NEXT_PUBLIC_SUPABASE_ANON_KEY"), {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 }
@@ -22,14 +41,14 @@ export function getSupabaseBrowser() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !key) return null;
-  return createClient(url, key);
+  return createClient(supabaseUrl(), key);
 }
 
 export async function requireAdmin(request: Request) {
   const authorization = request.headers.get("authorization") ?? "";
   const token = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
   if (!token) return null;
-  const url = env("NEXT_PUBLIC_SUPABASE_URL");
+  const url = supabaseUrl();
   const anonKey = env("NEXT_PUBLIC_SUPABASE_ANON_KEY");
   const authClient = createClient(url, anonKey, { auth: { autoRefreshToken: false, persistSession: false } });
   const { data: { user }, error } = await authClient.auth.getUser(token);
