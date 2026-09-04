@@ -168,6 +168,37 @@ begin
   left join public.products p on p.id = (item->>'product_id')::bigint and p.active and not p.sold_out;
   if v_requested_count <> v_valid_count then raise exception 'Um item do carrinho não está mais disponível.'; end if;
 
+  if exists (
+    select 1
+    from jsonb_array_elements(p_items) item
+    join public.products p on p.id = (item->>'product_id')::bigint
+    where jsonb_array_length(coalesce(item->'options', '[]'::jsonb)) <> coalesce((
+      select sum(
+        case
+          when option_group->>'kind' = 'combo' then least(20, case when coalesce(option_group->>'selectionCount', '') ~ '^[1-9][0-9]*$' then (option_group->>'selectionCount')::integer else 1 end)
+          else 1
+        end
+      )
+      from jsonb_array_elements(coalesce(p.options, '[]'::jsonb)) option_group
+    ), 0)
+    or jsonb_array_length(coalesce(item->'options', '[]'::jsonb)) <> (
+      select count(distinct chosen.value)
+      from jsonb_array_elements_text(coalesce(item->'options', '[]'::jsonb)) chosen(value)
+    )
+    or exists (
+      select 1
+      from jsonb_array_elements_text(coalesce(item->'options', '[]'::jsonb)) chosen(value)
+      where not exists (
+        select 1
+        from jsonb_array_elements(coalesce(p.options, '[]'::jsonb)) option_group
+        cross join jsonb_array_elements(coalesce(option_group->'values', '[]'::jsonb)) choice
+        where chosen.value = option_group->>'name' || ': ' || case when jsonb_typeof(choice) = 'string' then choice #>> '{}' else choice->>'name' end
+      )
+    )
+  ) then
+    raise exception 'Escolha corretamente todas as opções do produto.';
+  end if;
+
   insert into public.customers (name, phone) values (trim(p_customer_name), v_phone)
   on conflict (phone) do update set name = excluded.name, updated_at = now() returning id into v_customer_id;
   v_number := to_char(clock_timestamp(), 'YYMMDDHH24MISSMS') || lpad(floor(random() * 1000)::int::text, 3, '0');

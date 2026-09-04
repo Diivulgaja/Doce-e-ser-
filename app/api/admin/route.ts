@@ -1,6 +1,43 @@
 import { requireAdmin, toCategory, toOrder, toProduct, toSettings } from "@/lib/supabase";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+function parseJsonArray(value: unknown, label: string): unknown[] {
+  const source = String(value ?? "").trim();
+  if (!source) return [];
+  try {
+    const parsed: unknown = JSON.parse(source);
+    if (!Array.isArray(parsed)) throw new Error();
+    return parsed;
+  } catch {
+    throw new Error(`${label} precisam estar em uma lista válida.`);
+  }
+}
+
+function validateProductOptions(options: unknown[]) {
+  if (options.length > 20) throw new Error("Use no máximo 20 grupos de opções por produto.");
+  for (const rawOption of options) {
+    if (!rawOption || typeof rawOption !== "object") throw new Error("Revise as opções do produto.");
+    const option = rawOption as { kind?: unknown; name?: unknown; description?: unknown; selectionCount?: unknown; values?: unknown };
+    const values = Array.isArray(option.values) ? option.values : [];
+    const groupName = String(option.name ?? "").trim();
+    if (!groupName || groupName.length > 100 || values.length === 0 || values.length > 50) throw new Error("Cada grupo precisa de um nome de até 100 caracteres e de 1 a 50 escolhas.");
+    if (String(option.description ?? "").length > 500) throw new Error("A explicação do combo deve ter até 500 caracteres.");
+    const names = values.map((value) => typeof value === "string" ? value.trim() : String((value as { name?: unknown })?.name ?? "").trim());
+    if (names.some((name) => !name || name.length > 100) || new Set(names.map((name) => name.toLowerCase())).size !== names.length) throw new Error("As escolhas precisam ter nomes diferentes com até 100 caracteres.");
+    for (const value of values) {
+      if (typeof value === "string") continue;
+      if (!value || typeof value !== "object") throw new Error("Revise os itens do combo.");
+      const choice = value as { description?: unknown; imageUrl?: unknown };
+      if (String(choice.description ?? "").length > 1000) throw new Error("A descrição de cada opção deve ter até 1.000 caracteres.");
+      if (String(choice.imageUrl ?? "").length > 2048) throw new Error("A URL da imagem de uma opção é muito longa.");
+    }
+    if (option.kind === "combo") {
+      const required = Number(option.selectionCount ?? 1);
+      if (!Number.isInteger(required) || required < 1 || required > values.length || required > 20) throw new Error("A quantidade obrigatória do combo deve ficar entre 1 e 20 e caber no número de escolhas.");
+    }
+  }
+}
+
 async function getAdminData(supabase: SupabaseClient) {
   const [categories, products, settings, orders] = await Promise.all([
     supabase.from("categories").select("*").order("sort_order"),
@@ -29,7 +66,9 @@ export async function POST(request: Request) {
   try {
     if (action === "saveProduct") {
       const product = body.product as Record<string, unknown>;
-      const values = { name: String(product.name ?? "").trim(), description: String(product.description ?? "").trim(), price: Number(product.price), category_id: Number(product.categoryId), image_url: String(product.imageUrl ?? "sprite:0"), options: JSON.parse(String(product.optionsJson ?? "[]")), active: Boolean(product.active), sold_out: Boolean(product.soldOut), featured: Boolean(product.featured), sort_order: Number(product.sortOrder ?? 0) };
+      const options = parseJsonArray(product.optionsJson, "As opções do produto");
+      validateProductOptions(options);
+      const values = { name: String(product.name ?? "").trim(), description: String(product.description ?? "").trim(), price: Number(product.price), category_id: Number(product.categoryId), image_url: String(product.imageUrl ?? "sprite:0"), options, active: Boolean(product.active), sold_out: Boolean(product.soldOut), featured: Boolean(product.featured), sort_order: Number(product.sortOrder ?? 0) };
       if (!values.name || !Number.isFinite(values.price) || values.price <= 0) throw new Error("Preencha nome e preço corretamente.");
       const result = product.id
         ? await supabase.from("products").update(values).eq("id", Number(product.id)).select("id").single()
@@ -51,7 +90,11 @@ export async function POST(request: Request) {
       const { error } = await supabase.from("orders").update({ status }).eq("id", Number(body.id)).select("id").single(); if (error) throw error;
     } else if (action === "saveSettings") {
       const settings = body.settings as Record<string, unknown>;
-      const values = { store_name: String(settings.storeName), phone: String(settings.phone), whatsapp: String(settings.whatsapp), instagram: String(settings.instagram), address: String(settings.address), maps_url: String(settings.mapsUrl), open_time: String(settings.openTime), close_time: String(settings.closeTime), interval_minutes: Number(settings.intervalMinutes), orders_per_slot: Number(settings.ordersPerSlot), prep_minutes: Number(settings.prepMinutes), closed_days: JSON.parse(String(settings.closedDaysJson)), payment_methods: JSON.parse(String(settings.paymentMethodsJson)), updated_at: new Date().toISOString() };
+      const closedDays = parseJsonArray(settings.closedDaysJson, "Os dias fechados").map(Number);
+      const paymentMethods = parseJsonArray(settings.paymentMethodsJson, "As formas de pagamento").map(String).filter(Boolean);
+      if (closedDays.some((day) => !Number.isInteger(day) || day < 0 || day > 6)) throw new Error("Use números de 0 a 6 nos dias fechados.");
+      if (!paymentMethods.length) throw new Error("Informe pelo menos uma forma de pagamento.");
+      const values = { store_name: String(settings.storeName), phone: String(settings.phone), whatsapp: String(settings.whatsapp), instagram: String(settings.instagram), address: String(settings.address), maps_url: String(settings.mapsUrl), open_time: String(settings.openTime), close_time: String(settings.closeTime), interval_minutes: Number(settings.intervalMinutes), orders_per_slot: Number(settings.ordersPerSlot), prep_minutes: Number(settings.prepMinutes), closed_days: closedDays, payment_methods: paymentMethods, updated_at: new Date().toISOString() };
       const { error } = await supabase.from("store_settings").update(values).eq("id", 1).select("id").single(); if (error) throw error;
     } else return Response.json({ error: "Ação inválida." }, { status: 400 });
     return Response.json({ ok: true });

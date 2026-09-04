@@ -8,7 +8,7 @@ const orderSchema = z.object({
   pickupTime: z.string().regex(/^\d{2}:\d{2}$/),
   notes: z.string().trim().max(500).default(""),
   paymentMethod: z.string().trim().min(1).max(60),
-  items: z.array(z.object({ productId: z.number().int().positive(), quantity: z.number().int().min(1).max(30), selectedOptions: z.array(z.string().max(100)).default([]), notes: z.string().max(300).default("") })).min(1).max(40),
+  items: z.array(z.object({ productId: z.number().int().positive(), quantity: z.number().int().min(1).max(30), selectedOptions: z.array(z.string().max(220)).max(20).default([]), notes: z.string().max(300).default("") })).min(1).max(40),
 });
 
 export async function GET(request: Request) {

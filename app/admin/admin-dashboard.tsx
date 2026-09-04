@@ -3,7 +3,7 @@
 import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { BellRing, CheckCircle2, ChevronRight, ClipboardList, Clock3, Download, LayoutDashboard, LogOut, Menu, PackageOpen, Pencil, Plus, Settings, ShoppingBag, Store, Trash2, Upload, Volume2, VolumeX, X } from "lucide-react";
+import { BellRing, CheckCircle2, ChevronRight, ClipboardList, Clock3, Download, ImagePlus, Layers3, LayoutDashboard, LogOut, Menu, PackageOpen, Pencil, Plus, Settings, ShoppingBag, Store, Trash2, Upload, Volume2, VolumeX, X } from "lucide-react";
 import { toast } from "sonner";
 import ProductImage from "@/components/product-image";
 import { Button } from "@/components/ui/button";
@@ -11,8 +11,9 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Toaster } from "@/components/ui/sonner";
-import type { Catalog, Category, Order, Product, Settings as StoreSettings } from "@/lib/types";
+import type { Catalog, Category, Order, Product, ProductChoice, ProductOption, Settings as StoreSettings } from "@/lib/types";
 import { getSupabaseBrowser } from "@/lib/supabase";
+import { choiceDetails, isComboOption, parseProductOptions } from "@/lib/product-options";
 import type { Session } from "@supabase/supabase-js";
 
 type AdminData = Catalog & { orders: Order[]; user: { displayName: string; email: string } };
@@ -162,11 +163,128 @@ function Panel({ title, action, children }: { title: string; action?: React.Reac
 function OrderList({ orders, onStatus, detailed = false }: { orders: Order[]; onStatus: (order: Order, status: string) => void; detailed?: boolean }) { if (!orders.length) return <div className="rounded-2xl border border-dashed p-8 text-center text-[#806b5d]">Nenhum pedido por aqui ainda.</div>; return <div className="space-y-3">{orders.map((order) => <article key={order.id} className="rounded-2xl border border-[#53311d]/10 bg-white p-4 transition hover:border-[#8b674e]/25 hover:shadow-md"><div className="flex flex-wrap items-start gap-3"><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="font-serif text-xl">#{order.orderNumber}</h3><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${order.status === "received" ? "bg-[#f5dfdc] text-[#9f291f]" : order.status === "ready" ? "bg-[#e0ebdd] text-[#32652e]" : "bg-[#efe5d9] text-[#76513c]"}`}>{statusLabels[order.status]}</span></div><p className="mt-1 text-sm"><strong>{order.customerName}</strong> · {order.phone}</p><p className="mt-1 text-sm text-[#806b5d]">Retirada {new Date(`${order.pickupDate}T12:00:00`).toLocaleDateString("pt-BR")} às {order.pickupTime} · {money(order.total)} · {order.paymentMethod}</p>{detailed && <div className="mt-3 rounded-xl bg-[#f7f3ed] p-3 text-sm">{order.items.map((item) => <p key={item.id}>{item.quantity}× {item.productName}{item.optionsJson && item.optionsJson !== "[]" ? ` · ${JSON.parse(item.optionsJson).join(", ")}` : ""}</p>)}{order.notes && <p className="mt-2 text-[#8a4d2c]">Obs.: {order.notes}</p>}</div>}</div>{nextStatus[order.status] && <Button onClick={() => onStatus(order, nextStatus[order.status])} className={`w-full sm:w-auto ${adminPrimaryButton}`}>{nextLabels[order.status]} <ChevronRight /></Button>}</div></article>)}</div>; }
 
 function ProductEditor({ token, product, categories, onClose, onSave }: { token: string; product: Partial<Product>; categories: Category[]; onClose: () => void; onSave: (product: Partial<Product>) => Promise<void> }) {
-  const [draft, setDraft] = useState<Partial<Product>>(product); const [saving, setSaving] = useState(false);
-  const open = true;
-  async function upload(event: ChangeEvent<HTMLInputElement>) { const file = event.target.files?.[0]; if (!file) return; setSaving(true); try { const form = new FormData(); form.append("file", file); const response = await fetch("/api/admin/upload", { method: "POST", headers: { authorization: `Bearer ${token}` }, body: form }); const data = await response.json(); if (!response.ok) throw new Error(data.error); setDraft((current) => ({ ...current, imageUrl: data.url })); toast.success("Foto adicionada."); } catch (error) { toast.error(error instanceof Error ? error.message : "Erro no envio."); } finally { setSaving(false); } }
-  async function submit(event: FormEvent) { event.preventDefault(); setSaving(true); try { await onSave(draft); } catch (error) { toast.error(error instanceof Error ? error.message : "Erro ao salvar."); } finally { setSaving(false); } }
-  return <Dialog open={open} onOpenChange={(value) => !value && onClose()}><DialogContent className="max-h-[94vh] overflow-y-auto rounded-3xl bg-[#fffaf4] sm:max-w-2xl"><DialogHeader><DialogTitle className="font-serif text-3xl">{draft.id ? "Editar produto" : "Novo produto"}</DialogTitle><DialogDescription>Foto, preço, disponibilidade e opções do item.</DialogDescription></DialogHeader><form onSubmit={submit} className="grid gap-4 sm:grid-cols-2"><div className="sm:col-span-2"><div className="flex items-center gap-4">{draft.imageUrl && <ProductImage src={draft.imageUrl} alt="Prévia" className="size-28 rounded-2xl" />}<label className="flex h-12 cursor-pointer items-center gap-2 rounded-full border bg-white px-5 font-semibold shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"><Upload className="size-4" />Adicionar foto<input type="file" accept="image/*" className="hidden" onChange={upload} /></label></div></div><Field label="Nome"><Input value={draft.name ?? ""} onChange={(e) => setDraft({ ...draft, name: e.target.value })} required /></Field><Field label="Preço"><Input type="number" step="0.01" min="0.01" value={draft.price ?? ""} onChange={(e) => setDraft({ ...draft, price: Number(e.target.value) })} required /></Field><Field label="Categoria"><select value={draft.categoryId ?? ""} onChange={(e) => setDraft({ ...draft, categoryId: Number(e.target.value) })} className="h-10 rounded-md border bg-white px-3">{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></Field><Field label="Ordem"><Input type="number" value={draft.sortOrder ?? 0} onChange={(e) => setDraft({ ...draft, sortOrder: Number(e.target.value) })} /></Field><label className="grid gap-2 sm:col-span-2"><span className="font-medium">Descrição</span><textarea value={draft.description ?? ""} onChange={(e) => setDraft({ ...draft, description: e.target.value })} className="min-h-20 rounded-xl border bg-white p-3" /></label><label className="grid gap-2 sm:col-span-2"><span className="font-medium">Opções (JSON)</span><textarea value={draft.optionsJson ?? "[]"} onChange={(e) => setDraft({ ...draft, optionsJson: e.target.value })} className="min-h-20 rounded-xl border bg-white p-3 font-mono text-sm" placeholder='[{"name":"Tamanho","values":["P","M","G"]}]' /><small className="text-[#806b5d]">Permite tamanhos, sabores e adicionais.</small></label><Toggle label="Produto ativo" checked={!!draft.active} onChange={(active) => setDraft({ ...draft, active })} /><Toggle label="Marcar como esgotado" checked={!!draft.soldOut} onChange={(soldOut) => setDraft({ ...draft, soldOut })} /><Toggle label="Mostrar em destaque" checked={!!draft.featured} onChange={(featured) => setDraft({ ...draft, featured })} /><Button disabled={saving} className={`h-12 sm:col-span-2 ${adminPrimaryButton}`}>{saving ? "Salvando…" : "Salvar produto"}</Button></form></DialogContent></Dialog>;
+  const initialOptions = parseProductOptions(product.optionsJson);
+  const initialCombo = initialOptions.find(isComboOption);
+  const [draft, setDraft] = useState<Partial<Product>>(product);
+  const [saving, setSaving] = useState(false);
+  const [isCombo, setIsCombo] = useState(Boolean(initialCombo));
+  const [simpleOptions, setSimpleOptions] = useState(initialCombo ? "[]" : product.optionsJson?.trim() || "[]");
+  const [comboTitle, setComboTitle] = useState(initialCombo?.name || "Escolha os itens do combo");
+  const [comboDescription, setComboDescription] = useState(initialCombo?.description || "Monte seu combo escolhendo as opções abaixo.");
+  const [selectionCount, setSelectionCount] = useState(initialCombo?.selectionCount || 2);
+  const [choices, setChoices] = useState<ProductChoice[]>(() => initialCombo
+    ? initialCombo.values.map(choiceDetails)
+    : [{ id: "new-1", name: "", description: "", imageUrl: "" }, { id: "new-2", name: "", description: "", imageUrl: "" }]);
+
+  async function uploadFile(file: File) {
+    const form = new FormData();
+    form.append("file", file);
+    const response = await fetch("/api/admin/upload", { method: "POST", headers: { authorization: `Bearer ${token}` }, body: form });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error);
+    return String(data.url);
+  }
+
+  async function uploadProduct(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setSaving(true);
+    try {
+      const imageUrl = await uploadFile(file);
+      setDraft((current) => ({ ...current, imageUrl }));
+      toast.success("Foto principal adicionada.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Erro no envio.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function uploadChoice(event: ChangeEvent<HTMLInputElement>, index: number) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setSaving(true);
+    try {
+      const imageUrl = await uploadFile(file);
+      setChoices((current) => current.map((choice, choiceIndex) => choiceIndex === index ? { ...choice, imageUrl } : choice));
+      toast.success("Foto da opção adicionada.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Erro no envio.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function updateChoice(index: number, values: Partial<ProductChoice>) {
+    setChoices((current) => current.map((choice, choiceIndex) => choiceIndex === index ? { ...choice, ...values } : choice));
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    let optionsJson = simpleOptions.trim() || "[]";
+    if (isCombo) {
+      const completedChoices = choices.map((choice) => ({ ...choice, name: choice.name.trim(), description: choice.description?.trim() || "", imageUrl: choice.imageUrl || "" })).filter((choice) => choice.name);
+      if (!comboTitle.trim()) return toast.error("Informe o título das escolhas do combo.");
+      if (completedChoices.length < selectionCount) return toast.error(`Cadastre pelo menos ${selectionCount} opções no combo.`);
+      const combo: ProductOption = { kind: "combo", name: comboTitle.trim(), description: comboDescription.trim(), selectionCount, values: completedChoices };
+      optionsJson = JSON.stringify([combo]);
+    } else {
+      try {
+        if (!Array.isArray(JSON.parse(optionsJson))) throw new Error();
+      } catch {
+        return toast.error("As opções simples estão incompletas. Deixe vazio ou use o exemplo mostrado.");
+      }
+    }
+    setSaving(true);
+    try {
+      await onSave({ ...draft, optionsJson });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Erro ao salvar.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return <Dialog open onOpenChange={(value) => !value && onClose()}>
+    <DialogContent className="max-h-[94vh] overflow-y-auto rounded-3xl bg-[#fffaf4] sm:max-w-4xl">
+      <DialogHeader><DialogTitle className="font-serif text-3xl">{draft.id ? "Editar produto" : "Novo produto"}</DialogTitle><DialogDescription>Cadastre um produto comum ou monte um combo completo com fotos e descrições.</DialogDescription></DialogHeader>
+      <form onSubmit={submit} className="grid gap-5 sm:grid-cols-2">
+        <div className="sm:col-span-2"><div className="flex flex-wrap items-center gap-4">{draft.imageUrl && <ProductImage src={draft.imageUrl} alt="Prévia" className="size-28 rounded-2xl" />}<label className="flex h-12 cursor-pointer items-center gap-2 rounded-full border bg-white px-5 font-semibold shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"><Upload className="size-4" />Foto principal<input type="file" accept="image/*" className="hidden" onChange={uploadProduct} /></label></div></div>
+        <Field label="Nome"><Input value={draft.name ?? ""} onChange={(e) => setDraft({ ...draft, name: e.target.value })} required /></Field>
+        <Field label="Preço"><Input type="number" step="0.01" min="0.01" value={draft.price ?? ""} onChange={(e) => setDraft({ ...draft, price: Number(e.target.value) })} required /></Field>
+        <Field label="Categoria"><select value={draft.categoryId ?? ""} onChange={(e) => setDraft({ ...draft, categoryId: Number(e.target.value) })} className="h-10 rounded-md border bg-white px-3">{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></Field>
+        <Field label="Ordem"><Input type="number" value={draft.sortOrder ?? 0} onChange={(e) => setDraft({ ...draft, sortOrder: Number(e.target.value) })} /></Field>
+        <label className="grid gap-2 sm:col-span-2"><span className="font-medium">Descrição principal</span><textarea value={draft.description ?? ""} onChange={(e) => setDraft({ ...draft, description: e.target.value })} className="min-h-24 rounded-xl border bg-white p-3" /></label>
+
+        <label className="flex cursor-pointer items-center justify-between gap-4 rounded-2xl border border-[#7b4a2f]/20 bg-[#f2e4d2] p-4 sm:col-span-2">
+          <span className="flex items-center gap-3"><span className="grid size-11 place-items-center rounded-xl bg-[#5b2c16] text-white"><Layers3 className="size-5" /></span><span><strong className="block">Este produto é um combo</strong><small className="text-[#725844]">Permite escolher vários itens, cada um com foto e descrição.</small></span></span>
+          <Switch checked={isCombo} onCheckedChange={setIsCombo} />
+        </label>
+
+        {isCombo ? <section className="space-y-5 rounded-3xl border border-[#7b4a2f]/15 bg-white p-4 shadow-sm sm:col-span-2 sm:p-5">
+          <div className="grid gap-4 sm:grid-cols-[1fr_180px]">
+            <Field label="Título das escolhas"><Input value={comboTitle} onChange={(event) => setComboTitle(event.target.value)} placeholder="Ex.: Escolha sua dupla da felicidade" /></Field>
+            <Field label="Quantidade obrigatória"><Input type="number" min="1" max={Math.min(Math.max(choices.length, 1), 20)} value={selectionCount} onChange={(event) => setSelectionCount(Math.min(20, Math.max(1, Number(event.target.value) || 1)))} /></Field>
+          </div>
+          <label className="grid gap-2"><span className="font-medium">Explicação para o cliente</span><Input value={comboDescription} onChange={(event) => setComboDescription(event.target.value)} placeholder="Ex.: Escolha 2 opções" /></label>
+          <div className="flex items-end justify-between gap-4"><div><h3 className="font-serif text-xl">Itens disponíveis</h3><p className="text-sm text-[#806b5d]">Adicione uma foto e descreva cada sabor ou produto.</p></div><span className="rounded-full bg-[#efe5d9] px-3 py-1 text-xs font-bold text-[#6a3d24]">{choices.length} opções</span></div>
+          <div className="grid gap-4">
+            {choices.map((choice, index) => <article key={choice.id} className="grid gap-4 rounded-2xl border border-[#53311d]/10 bg-[#fffaf4] p-4 sm:grid-cols-[120px_1fr_auto]">
+              <div>{choice.imageUrl ? <ProductImage src={choice.imageUrl} alt={choice.name || `Opção ${index + 1}`} className="aspect-square w-full rounded-xl" /> : <div className="grid aspect-square place-items-center rounded-xl border border-dashed border-[#8b674e]/30 bg-white text-[#9b7b68]"><ImagePlus /></div>}<label className="mt-2 flex cursor-pointer items-center justify-center gap-1 rounded-full border bg-white px-2 py-2 text-xs font-semibold transition hover:bg-[#f2e4d2]"><Upload className="size-3" />Escolher foto<input type="file" accept="image/*" className="hidden" onChange={(event) => uploadChoice(event, index)} /></label></div>
+              <div className="grid gap-3"><Field label={`Nome da opção ${index + 1}`}><Input value={choice.name} onChange={(event) => updateChoice(index, { name: event.target.value })} placeholder="Ex.: Duo Cremes com Morango" /></Field><label className="grid gap-2"><span className="font-medium">Descrição</span><textarea value={choice.description || ""} onChange={(event) => updateChoice(index, { description: event.target.value })} className="min-h-24 rounded-xl border bg-white p-3" placeholder="Ingredientes e detalhes desta escolha" /></label></div>
+              <button type="button" aria-label={`Excluir opção ${index + 1}`} title="Excluir opção" onClick={() => setChoices((current) => current.filter((_, choiceIndex) => choiceIndex !== index))} className="grid size-10 place-items-center rounded-full border bg-white text-[#9f291f] transition hover:bg-[#f8e2df]"><Trash2 className="size-4" /></button>
+            </article>)}
+          </div>
+          <Button type="button" variant="outline" onClick={() => setChoices((current) => [...current, { id: crypto.randomUUID(), name: "", description: "", imageUrl: "" }])} className="h-11 w-full rounded-full border-dashed bg-white"><Plus />Adicionar opção ao combo</Button>
+        </section> : <label className="grid gap-2 sm:col-span-2"><span className="font-medium">Opções simples (opcional)</span><textarea value={simpleOptions === "[]" ? "" : simpleOptions} onChange={(event) => setSimpleOptions(event.target.value)} className="min-h-20 rounded-xl border bg-white p-3 font-mono text-sm" placeholder='[{"name":"Tamanho","values":["P","M","G"]}]' /><small className="text-[#806b5d]">Pode deixar vazio. Use apenas para tamanhos, sabores ou adicionais simples.</small></label>}
+
+        <Toggle label="Produto ativo" checked={!!draft.active} onChange={(active) => setDraft({ ...draft, active })} />
+        <Toggle label="Marcar como esgotado" checked={!!draft.soldOut} onChange={(soldOut) => setDraft({ ...draft, soldOut })} />
+        <Toggle label="Mostrar em destaque" checked={!!draft.featured} onChange={(featured) => setDraft({ ...draft, featured })} />
+        <Button disabled={saving} className={`h-12 sm:col-span-2 ${adminPrimaryButton}`}>{saving ? "Salvando…" : isCombo ? "Salvar combo" : "Salvar produto"}</Button>
+      </form>
+    </DialogContent>
+  </Dialog>;
 }
 
 function CategoryEditor({ category, onClose, onSave }: { category: Partial<Category>; onClose: () => void; onSave: (category: Partial<Category>) => Promise<void> }) { const [draft, setDraft] = useState<Partial<Category>>(category); return <Dialog open onOpenChange={(value) => !value && onClose()}><DialogContent className="rounded-3xl bg-[#fffaf4]"><DialogHeader><DialogTitle className="font-serif text-3xl">Categoria</DialogTitle></DialogHeader><form onSubmit={(event) => { event.preventDefault(); onSave(draft).catch((error) => toast.error(error.message)); }} className="space-y-4"><Field label="Nome"><Input value={draft.name ?? ""} onChange={(e) => setDraft({ ...draft, name: e.target.value })} required /></Field><Field label="Ordem"><Input type="number" value={draft.sortOrder ?? 0} onChange={(e) => setDraft({ ...draft, sortOrder: Number(e.target.value) })} /></Field><Toggle label="Categoria ativa" checked={!!draft.active} onChange={(active) => setDraft({ ...draft, active })} /><Button className={`h-12 w-full ${adminPrimaryButton}`}>Salvar categoria</Button></form></DialogContent></Dialog>; }

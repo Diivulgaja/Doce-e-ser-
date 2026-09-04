@@ -12,6 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Toaster } from "@/components/ui/sonner";
 import type { Catalog, Order, Product, ProductOption } from "@/lib/types";
+import { choiceDetails, isComboOption, optionSelectionCount, parseProductOptions } from "@/lib/product-options";
 import { getSupabaseBrowser } from "@/lib/supabase";
 
 type CartLine = { product: Product; quantity: number; selectedOptions: string[]; notes: string };
@@ -27,7 +28,7 @@ export default function Storefront() {
   const [cart, setCart] = useState<CartLine[]>([]);
   const [cartOpen, setCartOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
-  const [selectedOptions, setSelectedOptions] = useState<string[]>([]);
+  const [selectedOptions, setSelectedOptions] = useState<string[][]>([]);
   const [productNotes, setProductNotes] = useState("");
   const [checkout, setCheckout] = useState(false);
   const [confirmation, setConfirmation] = useState<Order | null>(null);
@@ -83,16 +84,23 @@ export default function Storefront() {
   const total = cart.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
 
   function openProduct(product: Product) {
+    const options = parseProductOptions(product.optionsJson);
     setSelectedProduct(product);
-    setSelectedOptions([]);
+    setSelectedOptions(options.map(() => []));
     setProductNotes("");
   }
 
   function addSelectedProduct() {
     if (!selectedProduct) return;
-    const options: ProductOption[] = JSON.parse(selectedProduct.optionsJson || "[]");
-    if (selectedOptions.length < options.length) return toast.error("Escolha todas as opções do produto.");
-    setCart((current) => [...current, { product: selectedProduct, quantity: 1, selectedOptions, notes: productNotes }]);
+    const options = parseProductOptions(selectedProduct.optionsJson);
+    const incomplete = options.findIndex((option, index) => (selectedOptions[index]?.length ?? 0) !== optionSelectionCount(option));
+    if (incomplete >= 0) {
+      const option = options[incomplete];
+      const required = optionSelectionCount(option);
+      return toast.error(`Escolha ${required} ${required === 1 ? "opção" : "opções"} em “${option.name}”.`);
+    }
+    const selections = options.flatMap((option, index) => (selectedOptions[index] ?? []).map((value) => `${option.name}: ${value}`));
+    setCart((current) => [...current, { product: selectedProduct, quantity: 1, selectedOptions: selections, notes: productNotes }]);
     setSelectedProduct(null);
     setCartOpen(true);
     toast.success("Produto adicionado ao carrinho.");
@@ -106,6 +114,8 @@ export default function Storefront() {
   if (!catalog) return <main className="grid min-h-screen place-items-center bg-[#fbf7f0] p-6 text-center text-[#3c2419]"><div className="max-w-lg rounded-3xl border border-[#6a3d24]/10 bg-white p-7 shadow-sm"><h1 className="font-serif text-3xl">Não foi possível carregar o cardápio</h1><p className="mt-3 text-[#806b5d]">{loadError || "Confira a conexão com o Supabase."}</p><p className="mt-4 rounded-xl bg-[#f2e4d2] p-3 text-sm">Confirme no arquivo <strong>.env.local</strong> as variáveis NEXT_PUBLIC_SUPABASE_URL e NEXT_PUBLIC_SUPABASE_ANON_KEY, depois reinicie o servidor.</p></div></main>;
 
   const settings = catalog.settings;
+  const productOptions = selectedProduct ? parseProductOptions(selectedProduct.optionsJson) : [];
+  const productIsCombo = productOptions.some(isComboOption);
   return (
     <div className="min-h-screen bg-[#fbf7f0] text-[#3c2419]">
       <Toaster position="top-center" richColors />
@@ -152,8 +162,16 @@ export default function Storefront() {
       <a href={`https://wa.me/${settings.whatsapp.replace(/\D/g, "")}`} target="_blank" rel="noreferrer" aria-label="Falar com a Doce é Ser pelo WhatsApp" className="fixed bottom-5 left-5 z-30 flex h-14 items-center gap-2 rounded-full bg-gradient-to-r from-[#168744] to-[#22ad5d] px-4 font-semibold text-white shadow-[0_10px_28px_rgba(22,135,68,.35)] transition hover:-translate-y-0.5 hover:shadow-[0_14px_34px_rgba(22,135,68,.45)]"><MessageCircle className="size-6" /><span className="hidden sm:inline">WhatsApp</span></a>
 
       <Dialog open={!!selectedProduct} onOpenChange={(open) => !open && setSelectedProduct(null)}>
-        <DialogContent className="max-h-[92vh] overflow-y-auto rounded-3xl border-[#6a3d24]/15 bg-[#fffaf4] p-0 sm:max-w-2xl">
-          {selectedProduct && <><ProductImage src={selectedProduct.imageUrl} alt={selectedProduct.name} className="aspect-[16/8] w-full rounded-t-3xl" /><div className="space-y-5 p-6"><DialogHeader><DialogTitle className="font-serif text-3xl">{selectedProduct.name}</DialogTitle><DialogDescription className="text-base leading-7 text-[#7a6252]">{selectedProduct.description}</DialogDescription></DialogHeader>{(JSON.parse(selectedProduct.optionsJson || "[]") as ProductOption[]).map((option, index) => <fieldset key={option.name}><legend className="mb-2 font-semibold">{option.name}</legend><div className="flex flex-wrap gap-2">{option.values.map((value) => <button key={value} onClick={() => setSelectedOptions((current) => { const next = [...current]; next[index] = `${option.name}: ${value}`; return next; })} className={`rounded-full border px-4 py-2 text-sm font-medium transition-all hover:-translate-y-0.5 ${selectedOptions[index] === `${option.name}: ${value}` ? "border-[#5b2c16] bg-[#5b2c16] text-white shadow-md" : "border-[#6a3d24]/20 bg-white hover:border-[#8b674e]/45 hover:shadow-sm"}`}>{value}</button>)}</div></fieldset>)}<div><Label htmlFor="product-notes">Observações</Label><textarea id="product-notes" value={productNotes} onChange={(event) => setProductNotes(event.target.value)} placeholder="Ex.: sem granulado" className="mt-2 min-h-20 w-full rounded-2xl border border-[#6a3d24]/15 bg-white p-3 outline-none focus:ring-2 focus:ring-[#8b5d3d]/30" /></div><Button onClick={addSelectedProduct} disabled={selectedProduct.soldOut} className={`h-13 w-full text-base ${primaryButton}`}>{selectedProduct.soldOut ? "Produto esgotado" : `Adicionar · ${money(selectedProduct.price)}`}</Button></div></>}
+        <DialogContent className={`max-h-[94vh] overflow-y-auto rounded-3xl border-[#6a3d24]/15 bg-[#fffaf4] p-0 ${productIsCombo ? "sm:max-w-5xl" : "sm:max-w-2xl"}`}>
+          {selectedProduct && <div className={productIsCombo ? "grid lg:grid-cols-[.9fr_1.1fr]" : ""}>
+            <ProductImage src={selectedProduct.imageUrl} alt={selectedProduct.name} className={`${productIsCombo ? "min-h-72 h-full lg:min-h-[560px] lg:rounded-l-3xl" : "aspect-[16/8] rounded-t-3xl"} w-full`} />
+            <div className="space-y-5 p-6">
+              <DialogHeader><DialogTitle className="font-serif text-3xl">{selectedProduct.name}</DialogTitle><DialogDescription className="text-base leading-7 text-[#7a6252]">{selectedProduct.description}</DialogDescription></DialogHeader>
+              <ProductOptionsPicker options={productOptions} selections={selectedOptions} onChange={setSelectedOptions} />
+              <div><Label htmlFor="product-notes">Observações</Label><textarea id="product-notes" value={productNotes} onChange={(event) => setProductNotes(event.target.value)} placeholder="Ex.: sem granulado" className="mt-2 min-h-20 w-full rounded-2xl border border-[#6a3d24]/15 bg-white p-3 outline-none focus:ring-2 focus:ring-[#8b5d3d]/30" /></div>
+              <Button onClick={addSelectedProduct} disabled={selectedProduct.soldOut} className={`h-13 w-full text-base ${primaryButton}`}>{selectedProduct.soldOut ? "Produto esgotado" : `Adicionar · ${money(selectedProduct.price)}`}</Button>
+            </div>
+          </div>}
         </DialogContent>
       </Dialog>
 
@@ -164,6 +182,44 @@ export default function Storefront() {
       <TrackingDialog open={tracking} onOpenChange={setTracking} order={trackedOrder} onOrder={setTrackedOrder} />
     </div>
   );
+}
+
+function ProductOptionsPicker({ options, selections, onChange }: { options: ProductOption[]; selections: string[][]; onChange: (options: string[][]) => void }) {
+  function select(optionIndex: number, name: string, required: number) {
+    const next = selections.map((values) => [...values]);
+    const current = next[optionIndex] ?? [];
+    if (current.includes(name)) next[optionIndex] = current.filter((value) => value !== name);
+    else if (required === 1) next[optionIndex] = [name];
+    else if (current.length < required) next[optionIndex] = [...current, name];
+    else return toast.error(`Você pode escolher até ${required} opções neste grupo.`);
+    onChange(next);
+  }
+
+  if (!options.length) return null;
+  return <div className="space-y-5">{options.map((option, optionIndex) => {
+    const required = optionSelectionCount(option);
+    const current = selections[optionIndex] ?? [];
+    const combo = isComboOption(option);
+    return <fieldset key={`${option.name}-${optionIndex}`} className={combo ? "overflow-hidden rounded-2xl border border-[#6a3d24]/12 bg-white" : ""}>
+      <div className={combo ? "flex items-start justify-between gap-3 bg-[#f3eadf] p-4" : "mb-2 flex items-center justify-between gap-3"}>
+        <div><legend className="font-semibold">{option.name}</legend>{option.description && <p className="mt-1 text-sm text-[#806b5d]">{option.description}</p>}</div>
+        <div className="flex shrink-0 items-center gap-2"><span className="rounded-full bg-[#5b2c16] px-2.5 py-1 text-xs font-bold text-white">{current.length}/{required}</span><span className="hidden rounded-full bg-[#ead8c3] px-2.5 py-1 text-[10px] font-bold uppercase text-[#6a3d24] sm:inline">Obrigatório</span></div>
+      </div>
+      {combo ? <div className="divide-y divide-[#6a3d24]/10">{option.values.map((value, index) => {
+        const choice = choiceDetails(value, index);
+        const selected = current.includes(choice.name);
+        return <button type="button" key={choice.id} onClick={() => select(optionIndex, choice.name, required)} className={`grid w-full grid-cols-[76px_1fr_auto] items-center gap-4 p-4 text-left transition hover:bg-[#fff8ef] ${selected ? "bg-[#f8eee1]" : "bg-white"}`}>
+          {choice.imageUrl ? <ProductImage src={choice.imageUrl} alt={choice.name} className="aspect-square w-full rounded-xl" /> : <span className="grid aspect-square place-items-center rounded-xl bg-[#f2e4d2] text-[#8b674e]"><Sparkles className="size-5" /></span>}
+          <span><strong className="block leading-tight">{choice.name}</strong>{choice.description && <small className="mt-1 block leading-5 text-[#806b5d]">{choice.description}</small>}</span>
+          <span className={`grid size-10 place-items-center rounded-full border transition ${selected ? "border-[#5b2c16] bg-[#5b2c16] text-white" : "border-[#b99b85]/40 bg-white text-[#6b351b]"}`}>{selected ? <Check className="size-5" /> : <Plus className="size-5" />}</span>
+        </button>;
+      })}</div> : <div className="flex flex-wrap gap-2">{option.values.map((value, index) => {
+        const choice = choiceDetails(value, index);
+        const selected = current.includes(choice.name);
+        return <button type="button" key={choice.id} onClick={() => select(optionIndex, choice.name, required)} className={`rounded-full border px-4 py-2 text-sm font-medium transition-all hover:-translate-y-0.5 ${selected ? "border-[#5b2c16] bg-[#5b2c16] text-white shadow-md" : "border-[#6a3d24]/20 bg-white hover:border-[#8b674e]/45 hover:shadow-sm"}`}>{choice.name}</button>;
+      })}</div>}
+    </fieldset>;
+  })}</div>;
 }
 
 function CheckoutDialog({ open, onOpenChange, cart, settings, total, onConfirmed }: { open: boolean; onOpenChange: (open: boolean) => void; cart: CartLine[]; settings: Catalog["settings"]; total: number; onConfirmed: (order: Order) => void }) {
