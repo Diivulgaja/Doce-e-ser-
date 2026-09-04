@@ -119,6 +119,7 @@ declare
   v_customer_id bigint;
   v_order_id bigint;
   v_total numeric(10,2);
+  v_extras numeric(10,2);
   v_number text;
   v_result jsonb;
   v_requested_count integer;
@@ -172,18 +173,33 @@ begin
     select 1
     from jsonb_array_elements(p_items) item
     join public.products p on p.id = (item->>'product_id')::bigint
-    where jsonb_array_length(coalesce(item->'options', '[]'::jsonb)) <> coalesce((
-      select sum(
-        case
-          when option_group->>'kind' = 'combo' then least(20, case when coalesce(option_group->>'selectionCount', '') ~ '^[1-9][0-9]*$' then (option_group->>'selectionCount')::integer else 1 end)
-          else 1
-        end
-      )
-      from jsonb_array_elements(coalesce(p.options, '[]'::jsonb)) option_group
-    ), 0)
-    or jsonb_array_length(coalesce(item->'options', '[]'::jsonb)) <> (
+    where jsonb_array_length(coalesce(item->'options', '[]'::jsonb)) <> (
       select count(distinct chosen.value)
       from jsonb_array_elements_text(coalesce(item->'options', '[]'::jsonb)) chosen(value)
+    )
+    or exists (
+      select 1
+      from jsonb_array_elements(coalesce(p.options, '[]'::jsonb)) option_group
+      where (
+        select count(*)
+        from jsonb_array_elements_text(coalesce(item->'options', '[]'::jsonb)) chosen(value)
+        where exists (
+          select 1
+          from jsonb_array_elements(coalesce(option_group->'values', '[]'::jsonb)) choice
+          where chosen.value = option_group->>'name' || ': ' || case when jsonb_typeof(choice) = 'string' then choice #>> '{}' else choice->>'name' end
+        )
+      ) not between
+        case
+          when coalesce(option_group->>'minSelections', '') ~ '^[0-9]+$' then least(20, (option_group->>'minSelections')::integer)
+          when option_group->>'kind' = 'addon' then 0
+          when coalesce(option_group->>'selectionCount', '') ~ '^[1-9][0-9]*$' then least(20, (option_group->>'selectionCount')::integer)
+          else 1
+        end
+      and case
+        when coalesce(option_group->>'maxSelections', '') ~ '^[1-9][0-9]*$' then least(20, (option_group->>'maxSelections')::integer)
+        when coalesce(option_group->>'selectionCount', '') ~ '^[1-9][0-9]*$' then least(20, (option_group->>'selectionCount')::integer)
+        else 1
+      end
     )
     or exists (
       select 1
@@ -199,6 +215,22 @@ begin
     raise exception 'Escolha corretamente todas as opções do produto.';
   end if;
 
+  select coalesce(sum(
+    (item->>'quantity')::integer * case
+      when jsonb_typeof(choice) = 'object' and coalesce(choice->>'priceDelta', '') ~ '^[0-9]+([.][0-9]+)?$'
+        then least(10000, (choice->>'priceDelta')::numeric)
+      else 0
+    end
+  ), 0)
+  into v_extras
+  from jsonb_array_elements(p_items) item
+  join public.products p on p.id = (item->>'product_id')::bigint
+  cross join lateral jsonb_array_elements_text(coalesce(item->'options', '[]'::jsonb)) chosen(value)
+  join lateral jsonb_array_elements(coalesce(p.options, '[]'::jsonb)) option_group on true
+  join lateral jsonb_array_elements(coalesce(option_group->'values', '[]'::jsonb)) choice
+    on chosen.value = option_group->>'name' || ': ' || case when jsonb_typeof(choice) = 'string' then choice #>> '{}' else choice->>'name' end;
+  v_total := v_total + v_extras;
+
   insert into public.customers (name, phone) values (trim(p_customer_name), v_phone)
   on conflict (phone) do update set name = excluded.name, updated_at = now() returning id into v_customer_id;
   v_number := to_char(clock_timestamp(), 'YYMMDDHH24MISSMS') || lpad(floor(random() * 1000)::int::text, 3, '0');
@@ -206,7 +238,13 @@ begin
   values (v_number, v_customer_id, trim(p_customer_name), v_phone, p_pickup_date, p_pickup_time, coalesce(trim(p_notes),''), p_payment_method, v_total)
   returning id into v_order_id;
   insert into public.order_items (order_id, product_id, product_name, quantity, unit_price, options, notes)
-  select v_order_id, p.id, p.name, (item->>'quantity')::integer, p.price, coalesce(item->'options','[]'::jsonb), trim(coalesce(item->>'notes',''))
+  select v_order_id, p.id, p.name, (item->>'quantity')::integer, p.price + coalesce((
+    select sum(case when jsonb_typeof(choice) = 'object' and coalesce(choice->>'priceDelta', '') ~ '^[0-9]+([.][0-9]+)?$' then least(10000, (choice->>'priceDelta')::numeric) else 0 end)
+    from jsonb_array_elements_text(coalesce(item->'options', '[]'::jsonb)) chosen(value)
+    join lateral jsonb_array_elements(coalesce(p.options, '[]'::jsonb)) option_group on true
+    join lateral jsonb_array_elements(coalesce(option_group->'values', '[]'::jsonb)) choice
+      on chosen.value = option_group->>'name' || ': ' || case when jsonb_typeof(choice) = 'string' then choice #>> '{}' else choice->>'name' end
+  ), 0), coalesce(item->'options','[]'::jsonb), trim(coalesce(item->>'notes',''))
   from jsonb_array_elements(p_items) item join public.products p on p.id = (item->>'product_id')::bigint;
   select to_jsonb(o.*) || jsonb_build_object('order_items', coalesce(jsonb_agg(to_jsonb(oi.*)) filter (where oi.id is not null), '[]'::jsonb)) into v_result
   from public.orders o left join public.order_items oi on oi.order_id = o.id where o.id = v_order_id group by o.id;

@@ -13,7 +13,7 @@ import { Switch } from "@/components/ui/switch";
 import { Toaster } from "@/components/ui/sonner";
 import type { Catalog, Category, Order, Product, ProductChoice, ProductOption, Settings as StoreSettings } from "@/lib/types";
 import { getSupabaseBrowser } from "@/lib/supabase";
-import { choiceDetails, isComboOption, parseProductOptions } from "@/lib/product-options";
+import { choiceDetails, optionSelectionLimits, parseProductOptions } from "@/lib/product-options";
 import type { Session } from "@supabase/supabase-js";
 
 type AdminData = Catalog & { orders: Order[]; user: { displayName: string; email: string } };
@@ -145,7 +145,7 @@ export default function AdminDashboard() {
         {tab === "settings" && <SettingsForm settings={data.settings} onSave={(settings) => action({ action: "saveSettings", settings }, "Configurações salvas.")} />}
       </div>
     </main>
-    {productEditor && <ProductEditor key={productEditor.id ?? "new"} token={session.access_token} product={productEditor} categories={data.categories} onClose={() => setProductEditor(null)} onSave={async (product) => { await action({ action: "saveProduct", product }, "Produto salvo."); setProductEditor(null); }} />}
+    {productEditor && <ProductEditor key={productEditor.id ?? "new"} token={session.access_token} product={productEditor} categories={data.categories} products={data.products} onClose={() => setProductEditor(null)} onSave={async (product) => { await action({ action: "saveProduct", product }, "Produto salvo."); setProductEditor(null); }} />}
     {categoryEditor && <CategoryEditor key={categoryEditor.id ?? "new"} category={categoryEditor} onClose={() => setCategoryEditor(null)} onSave={async (category) => { await action({ action: "saveCategory", category }, "Categoria salva."); setCategoryEditor(null); }} />}
   </div>;
 }
@@ -162,19 +162,21 @@ function Panel({ title, action, children }: { title: string; action?: React.Reac
 
 function OrderList({ orders, onStatus, detailed = false }: { orders: Order[]; onStatus: (order: Order, status: string) => void; detailed?: boolean }) { if (!orders.length) return <div className="rounded-2xl border border-dashed p-8 text-center text-[#806b5d]">Nenhum pedido por aqui ainda.</div>; return <div className="space-y-3">{orders.map((order) => <article key={order.id} className="rounded-2xl border border-[#53311d]/10 bg-white p-4 transition hover:border-[#8b674e]/25 hover:shadow-md"><div className="flex flex-wrap items-start gap-3"><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="font-serif text-xl">#{order.orderNumber}</h3><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${order.status === "received" ? "bg-[#f5dfdc] text-[#9f291f]" : order.status === "ready" ? "bg-[#e0ebdd] text-[#32652e]" : "bg-[#efe5d9] text-[#76513c]"}`}>{statusLabels[order.status]}</span></div><p className="mt-1 text-sm"><strong>{order.customerName}</strong> · {order.phone}</p><p className="mt-1 text-sm text-[#806b5d]">Retirada {new Date(`${order.pickupDate}T12:00:00`).toLocaleDateString("pt-BR")} às {order.pickupTime} · {money(order.total)} · {order.paymentMethod}</p>{detailed && <div className="mt-3 rounded-xl bg-[#f7f3ed] p-3 text-sm">{order.items.map((item) => <p key={item.id}>{item.quantity}× {item.productName}{item.optionsJson && item.optionsJson !== "[]" ? ` · ${JSON.parse(item.optionsJson).join(", ")}` : ""}</p>)}{order.notes && <p className="mt-2 text-[#8a4d2c]">Obs.: {order.notes}</p>}</div>}</div>{nextStatus[order.status] && <Button onClick={() => onStatus(order, nextStatus[order.status])} className={`w-full sm:w-auto ${adminPrimaryButton}`}>{nextLabels[order.status]} <ChevronRight /></Button>}</div></article>)}</div>; }
 
-function ProductEditor({ token, product, categories, onClose, onSave }: { token: string; product: Partial<Product>; categories: Category[]; onClose: () => void; onSave: (product: Partial<Product>) => Promise<void> }) {
+type EditableOptionGroup = { id: string; name: string; description: string; minSelections: number; maxSelections: number; values: ProductChoice[] };
+
+function emptyOptionGroup(id = "new-group-1"): EditableOptionGroup {
+  return { id, name: "", description: "", minSelections: 0, maxSelections: 1, values: [] };
+}
+
+function ProductEditor({ token, product, categories, products, onClose, onSave }: { token: string; product: Partial<Product>; categories: Category[]; products: Product[]; onClose: () => void; onSave: (product: Partial<Product>) => Promise<void> }) {
   const initialOptions = parseProductOptions(product.optionsJson);
-  const initialCombo = initialOptions.find(isComboOption);
   const [draft, setDraft] = useState<Partial<Product>>(product);
   const [saving, setSaving] = useState(false);
-  const [isCombo, setIsCombo] = useState(Boolean(initialCombo));
-  const [simpleOptions, setSimpleOptions] = useState(initialCombo ? "[]" : product.optionsJson?.trim() || "[]");
-  const [comboTitle, setComboTitle] = useState(initialCombo?.name || "Escolha os itens do combo");
-  const [comboDescription, setComboDescription] = useState(initialCombo?.description || "Monte seu combo escolhendo as opções abaixo.");
-  const [selectionCount, setSelectionCount] = useState(initialCombo?.selectionCount || 2);
-  const [choices, setChoices] = useState<ProductChoice[]>(() => initialCombo
-    ? initialCombo.values.map(choiceDetails)
-    : [{ id: "new-1", name: "", description: "", imageUrl: "" }, { id: "new-2", name: "", description: "", imageUrl: "" }]);
+  const [hasOptionGroups, setHasOptionGroups] = useState(initialOptions.length > 0);
+  const [groups, setGroups] = useState<EditableOptionGroup[]>(() => initialOptions.length ? initialOptions.map((option, index) => {
+    const limits = optionSelectionLimits(option);
+    return { id: `group-${index}`, name: option.name, description: option.description || "", minSelections: limits.min, maxSelections: limits.max, values: option.values.map(choiceDetails) };
+  }) : [emptyOptionGroup()]);
 
   async function uploadFile(file: File) {
     const form = new FormData();
@@ -200,13 +202,13 @@ function ProductEditor({ token, product, categories, onClose, onSave }: { token:
     }
   }
 
-  async function uploadChoice(event: ChangeEvent<HTMLInputElement>, index: number) {
+  async function uploadChoice(event: ChangeEvent<HTMLInputElement>, groupIndex: number, choiceIndex: number) {
     const file = event.target.files?.[0];
     if (!file) return;
     setSaving(true);
     try {
       const imageUrl = await uploadFile(file);
-      setChoices((current) => current.map((choice, choiceIndex) => choiceIndex === index ? { ...choice, imageUrl } : choice));
+      setGroups((current) => current.map((group, currentGroupIndex) => currentGroupIndex === groupIndex ? { ...group, values: group.values.map((choice, currentChoiceIndex) => currentChoiceIndex === choiceIndex ? { ...choice, imageUrl } : choice) } : group));
       toast.success("Foto da opção adicionada.");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Erro no envio.");
@@ -215,25 +217,39 @@ function ProductEditor({ token, product, categories, onClose, onSave }: { token:
     }
   }
 
-  function updateChoice(index: number, values: Partial<ProductChoice>) {
-    setChoices((current) => current.map((choice, choiceIndex) => choiceIndex === index ? { ...choice, ...values } : choice));
+  function updateGroup(index: number, values: Partial<EditableOptionGroup>) {
+    setGroups((current) => current.map((group, groupIndex) => groupIndex === index ? { ...group, ...values } : group));
+  }
+
+  function updateChoice(groupIndex: number, choiceIndex: number, values: Partial<ProductChoice>) {
+    setGroups((current) => current.map((group, currentGroupIndex) => currentGroupIndex === groupIndex ? { ...group, values: group.values.map((choice, currentChoiceIndex) => currentChoiceIndex === choiceIndex ? { ...choice, ...values } : choice) } : group));
+  }
+
+  function addLinkedProduct(groupIndex: number, productId: number) {
+    const linked = products.find((item) => item.id === productId);
+    if (!linked) return;
+    setGroups((current) => current.map((group, currentGroupIndex) => currentGroupIndex === groupIndex ? { ...group, values: [...group.values, { id: crypto.randomUUID(), productId: linked.id, name: linked.name, description: linked.description, imageUrl: linked.imageUrl, priceDelta: linked.price }] } : group));
   }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    let optionsJson = simpleOptions.trim() || "[]";
-    if (isCombo) {
-      const completedChoices = choices.map((choice) => ({ ...choice, name: choice.name.trim(), description: choice.description?.trim() || "", imageUrl: choice.imageUrl || "" })).filter((choice) => choice.name);
-      if (!comboTitle.trim()) return toast.error("Informe o título das escolhas do combo.");
-      if (completedChoices.length < selectionCount) return toast.error(`Cadastre pelo menos ${selectionCount} opções no combo.`);
-      const combo: ProductOption = { kind: "combo", name: comboTitle.trim(), description: comboDescription.trim(), selectionCount, values: completedChoices };
-      optionsJson = JSON.stringify([combo]);
-    } else {
-      try {
-        if (!Array.isArray(JSON.parse(optionsJson))) throw new Error();
-      } catch {
-        return toast.error("As opções simples estão incompletas. Deixe vazio ou use o exemplo mostrado.");
+    let optionsJson = "[]";
+    if (hasOptionGroups) {
+      if (!groups.length) return toast.error("Adicione pelo menos um grupo de opções ou desative essa função.");
+      const normalized: ProductOption[] = [];
+      let maximumSelections = 0;
+      for (const group of groups) {
+        const choices = group.values.map((choice) => ({ ...choice, name: choice.name.trim(), description: choice.description?.trim() || "", imageUrl: choice.imageUrl || "", productId: Number(choice.productId) || undefined, priceDelta: Math.max(0, Number(choice.priceDelta) || 0) })).filter((choice) => choice.name);
+        if (!group.name.trim()) return toast.error("Informe o título de todos os grupos.");
+        if (!choices.length) return toast.error(`Adicione pelo menos uma opção em “${group.name}”.`);
+        const min = Math.max(0, Math.floor(group.minSelections || 0));
+        const max = Math.max(1, Math.floor(group.maxSelections || 1));
+        if (min > max || max > choices.length) return toast.error(`Revise o mínimo e o máximo de escolhas em “${group.name}”.`);
+        maximumSelections += max;
+        normalized.push({ kind: min === 0 ? "addon" : "combo", name: group.name.trim(), description: group.description.trim(), minSelections: min, maxSelections: max, selectionCount: min === max ? max : undefined, values: choices });
       }
+      if (maximumSelections > 20) return toast.error("A soma dos máximos de todos os grupos deve ser de até 20 escolhas.");
+      optionsJson = JSON.stringify(normalized);
     }
     setSaving(true);
     try {
@@ -257,31 +273,30 @@ function ProductEditor({ token, product, categories, onClose, onSave }: { token:
         <label className="grid gap-2 sm:col-span-2"><span className="font-medium">Descrição principal</span><textarea value={draft.description ?? ""} onChange={(e) => setDraft({ ...draft, description: e.target.value })} className="min-h-24 rounded-xl border bg-white p-3" /></label>
 
         <label className="flex cursor-pointer items-center justify-between gap-4 rounded-2xl border border-[#7b4a2f]/20 bg-[#f2e4d2] p-4 sm:col-span-2">
-          <span className="flex items-center gap-3"><span className="grid size-11 place-items-center rounded-xl bg-[#5b2c16] text-white"><Layers3 className="size-5" /></span><span><strong className="block">Este produto é um combo</strong><small className="text-[#725844]">Permite escolher vários itens, cada um com foto e descrição.</small></span></span>
-          <Switch checked={isCombo} onCheckedChange={setIsCombo} />
+          <span className="flex items-center gap-3"><span className="grid size-11 place-items-center rounded-xl bg-[#5b2c16] text-white"><Layers3 className="size-5" /></span><span><strong className="block">Adicionar opções, produtos ou bebidas</strong><small className="text-[#725844]">Crie combos e adicionais opcionais com acréscimo no preço.</small></span></span>
+          <Switch checked={hasOptionGroups} onCheckedChange={setHasOptionGroups} />
         </label>
 
-        {isCombo ? <section className="space-y-5 rounded-3xl border border-[#7b4a2f]/15 bg-white p-4 shadow-sm sm:col-span-2 sm:p-5">
-          <div className="grid gap-4 sm:grid-cols-[1fr_180px]">
-            <Field label="Título das escolhas"><Input value={comboTitle} onChange={(event) => setComboTitle(event.target.value)} placeholder="Ex.: Escolha sua dupla da felicidade" /></Field>
-            <Field label="Quantidade obrigatória"><Input type="number" min="1" max={Math.min(Math.max(choices.length, 1), 20)} value={selectionCount} onChange={(event) => setSelectionCount(Math.min(20, Math.max(1, Number(event.target.value) || 1)))} /></Field>
-          </div>
-          <label className="grid gap-2"><span className="font-medium">Explicação para o cliente</span><Input value={comboDescription} onChange={(event) => setComboDescription(event.target.value)} placeholder="Ex.: Escolha 2 opções" /></label>
-          <div className="flex items-end justify-between gap-4"><div><h3 className="font-serif text-xl">Itens disponíveis</h3><p className="text-sm text-[#806b5d]">Adicione uma foto e descreva cada sabor ou produto.</p></div><span className="rounded-full bg-[#efe5d9] px-3 py-1 text-xs font-bold text-[#6a3d24]">{choices.length} opções</span></div>
-          <div className="grid gap-4">
-            {choices.map((choice, index) => <article key={choice.id} className="grid gap-4 rounded-2xl border border-[#53311d]/10 bg-[#fffaf4] p-4 sm:grid-cols-[120px_1fr_auto]">
-              <div>{choice.imageUrl ? <ProductImage src={choice.imageUrl} alt={choice.name || `Opção ${index + 1}`} className="aspect-square w-full rounded-xl" /> : <div className="grid aspect-square place-items-center rounded-xl border border-dashed border-[#8b674e]/30 bg-white text-[#9b7b68]"><ImagePlus /></div>}<label className="mt-2 flex cursor-pointer items-center justify-center gap-1 rounded-full border bg-white px-2 py-2 text-xs font-semibold transition hover:bg-[#f2e4d2]"><Upload className="size-3" />Escolher foto<input type="file" accept="image/*" className="hidden" onChange={(event) => uploadChoice(event, index)} /></label></div>
-              <div className="grid gap-3"><Field label={`Nome da opção ${index + 1}`}><Input value={choice.name} onChange={(event) => updateChoice(index, { name: event.target.value })} placeholder="Ex.: Duo Cremes com Morango" /></Field><label className="grid gap-2"><span className="font-medium">Descrição</span><textarea value={choice.description || ""} onChange={(event) => updateChoice(index, { description: event.target.value })} className="min-h-24 rounded-xl border bg-white p-3" placeholder="Ingredientes e detalhes desta escolha" /></label></div>
-              <button type="button" aria-label={`Excluir opção ${index + 1}`} title="Excluir opção" onClick={() => setChoices((current) => current.filter((_, choiceIndex) => choiceIndex !== index))} className="grid size-10 place-items-center rounded-full border bg-white text-[#9f291f] transition hover:bg-[#f8e2df]"><Trash2 className="size-4" /></button>
-            </article>)}
-          </div>
-          <Button type="button" variant="outline" onClick={() => setChoices((current) => [...current, { id: crypto.randomUUID(), name: "", description: "", imageUrl: "" }])} className="h-11 w-full rounded-full border-dashed bg-white"><Plus />Adicionar opção ao combo</Button>
-        </section> : <label className="grid gap-2 sm:col-span-2"><span className="font-medium">Opções simples (opcional)</span><textarea value={simpleOptions === "[]" ? "" : simpleOptions} onChange={(event) => setSimpleOptions(event.target.value)} className="min-h-20 rounded-xl border bg-white p-3 font-mono text-sm" placeholder='[{"name":"Tamanho","values":["P","M","G"]}]' /><small className="text-[#806b5d]">Pode deixar vazio. Use apenas para tamanhos, sabores ou adicionais simples.</small></label>}
+        {hasOptionGroups && <section className="space-y-5 sm:col-span-2">
+          {groups.map((group, groupIndex) => <article key={group.id} className="space-y-5 rounded-3xl border border-[#7b4a2f]/15 bg-white p-4 shadow-sm sm:p-5">
+            <div className="flex items-center justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[.16em] text-[#9a6847]">Grupo {groupIndex + 1}</p><h3 className="font-serif text-xl">{group.name || "Novo grupo de escolhas"}</h3></div><button type="button" aria-label="Excluir grupo" onClick={() => setGroups((current) => current.filter((_, index) => index !== groupIndex))} className="grid size-10 place-items-center rounded-full border bg-white text-[#9f291f] transition hover:bg-[#f8e2df]"><Trash2 className="size-4" /></button></div>
+            <div className="grid gap-4 sm:grid-cols-2"><Field label="Título do grupo"><Input value={group.name} onChange={(event) => updateGroup(groupIndex, { name: event.target.value })} placeholder="Ex.: Que tal uma bebida?" /></Field><Field label="Explicação"><Input value={group.description} onChange={(event) => updateGroup(groupIndex, { description: event.target.value })} placeholder="Ex.: Escolha até 1 opção" /></Field></div>
+            <div className="grid gap-4 sm:grid-cols-2"><Field label="Mínimo de escolhas (0 = opcional)"><Input type="number" min="0" max="20" value={group.minSelections} onChange={(event) => updateGroup(groupIndex, { minSelections: Math.min(20, Math.max(0, Number(event.target.value) || 0)) })} /></Field><Field label="Máximo de escolhas"><Input type="number" min="1" max="20" value={group.maxSelections} onChange={(event) => updateGroup(groupIndex, { maxSelections: Math.min(20, Math.max(1, Number(event.target.value) || 1)) })} /></Field></div>
+            <div className="flex flex-col justify-between gap-3 rounded-2xl bg-[#f7f1e9] p-4 sm:flex-row sm:items-end"><label className="grid flex-1 gap-2"><span className="text-sm font-semibold">Adicionar produto ou bebida já cadastrada</span><select value="" onChange={(event) => { const id = Number(event.target.value); if (id) addLinkedProduct(groupIndex, id); }} className="h-11 rounded-xl border bg-white px-3"><option value="">Selecione no cardápio…</option>{products.filter((item) => item.id !== draft.id).map((item) => <option key={item.id} value={item.id}>{item.name} · {money(item.price)}</option>)}</select></label><Button type="button" variant="outline" onClick={() => updateGroup(groupIndex, { values: [...group.values, { id: crypto.randomUUID(), name: "", description: "", imageUrl: "", priceDelta: 0 }] })} className="h-11 rounded-full bg-white"><Plus />Criar opção manual</Button></div>
+            {!products.filter((item) => item.id !== draft.id).length && <p className="rounded-xl border border-dashed p-3 text-sm text-[#806b5d]">Cadastre bebidas ou outros produtos no cardápio para selecioná-los aqui. Você também pode criar uma opção manual.</p>}
+            <div className="grid gap-4">{group.values.map((choice, choiceIndex) => <article key={choice.id} className="grid gap-4 rounded-2xl border border-[#53311d]/10 bg-[#fffaf4] p-4 sm:grid-cols-[110px_1fr_auto]">
+              <div>{choice.imageUrl ? <ProductImage src={choice.imageUrl} alt={choice.name || `Opção ${choiceIndex + 1}`} className="aspect-square w-full rounded-xl" /> : <div className="grid aspect-square place-items-center rounded-xl border border-dashed border-[#8b674e]/30 bg-white text-[#9b7b68]"><ImagePlus /></div>}<label className="mt-2 flex cursor-pointer items-center justify-center gap-1 rounded-full border bg-white px-2 py-2 text-xs font-semibold transition hover:bg-[#f2e4d2]"><Upload className="size-3" />Foto<input type="file" accept="image/*" className="hidden" onChange={(event) => uploadChoice(event, groupIndex, choiceIndex)} /></label></div>
+              <div className="grid gap-3"><div className="grid gap-3 sm:grid-cols-[1fr_170px]"><Field label="Nome da opção"><Input value={choice.name} onChange={(event) => updateChoice(groupIndex, choiceIndex, { name: event.target.value })} placeholder="Ex.: Refrigerante Guaraná 350 ml" /></Field><Field label="Acréscimo no preço"><Input type="number" min="0" step="0.01" value={choice.priceDelta ?? 0} onChange={(event) => updateChoice(groupIndex, choiceIndex, { priceDelta: Math.max(0, Number(event.target.value) || 0) })} /></Field></div><label className="grid gap-2"><span className="font-medium">Descrição</span><textarea value={choice.description || ""} onChange={(event) => updateChoice(groupIndex, choiceIndex, { description: event.target.value })} className="min-h-20 rounded-xl border bg-white p-3" placeholder="Detalhes desta opção" /></label>{choice.productId && <small className="font-medium text-[#7b4a2f]">Vinculado ao produto #{choice.productId}. Você pode alterar o preço promocional acima.</small>}</div>
+              <button type="button" aria-label={`Excluir opção ${choiceIndex + 1}`} onClick={() => updateGroup(groupIndex, { values: group.values.filter((_, index) => index !== choiceIndex) })} className="grid size-10 place-items-center rounded-full border bg-white text-[#9f291f] transition hover:bg-[#f8e2df]"><Trash2 className="size-4" /></button>
+            </article>)}</div>
+          </article>)}
+          <Button type="button" variant="outline" onClick={() => setGroups((current) => [...current, emptyOptionGroup(crypto.randomUUID())])} className="h-12 w-full rounded-full border-dashed bg-white"><Plus />Adicionar outro grupo</Button>
+        </section>}
 
         <Toggle label="Produto ativo" checked={!!draft.active} onChange={(active) => setDraft({ ...draft, active })} />
         <Toggle label="Marcar como esgotado" checked={!!draft.soldOut} onChange={(soldOut) => setDraft({ ...draft, soldOut })} />
         <Toggle label="Mostrar em destaque" checked={!!draft.featured} onChange={(featured) => setDraft({ ...draft, featured })} />
-        <Button disabled={saving} className={`h-12 sm:col-span-2 ${adminPrimaryButton}`}>{saving ? "Salvando…" : isCombo ? "Salvar combo" : "Salvar produto"}</Button>
+        <Button disabled={saving} className={`h-12 sm:col-span-2 ${adminPrimaryButton}`}>{saving ? "Salvando…" : "Salvar produto"}</Button>
       </form>
     </DialogContent>
   </Dialog>;

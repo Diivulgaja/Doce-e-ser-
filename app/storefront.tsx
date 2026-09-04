@@ -12,10 +12,10 @@ import { Label } from "@/components/ui/label";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Toaster } from "@/components/ui/sonner";
 import type { Catalog, Order, Product, ProductOption } from "@/lib/types";
-import { choiceDetails, isComboOption, optionSelectionCount, parseProductOptions } from "@/lib/product-options";
+import { choiceDetails, choicePriceDelta, isComboOption, optionSelectionLimits, parseProductOptions } from "@/lib/product-options";
 import { getSupabaseBrowser } from "@/lib/supabase";
 
-type CartLine = { product: Product; quantity: number; selectedOptions: string[]; notes: string };
+type CartLine = { product: Product; quantity: number; unitPrice: number; selectedOptions: string[]; notes: string };
 const money = (value: number) => new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value);
 const statusLabels: Record<string, string> = { received: "Pedido recebido", confirmed: "Confirmado", preparing: "Em preparação", ready: "Pronto para retirada", picked_up: "Retirado", cancelled: "Cancelado" };
 const primaryButton = "rounded-full bg-gradient-to-r from-[#4a2110] via-[#6b351b] to-[#4a2110] font-semibold text-[#fff8ed] shadow-[0_10px_28px_rgba(74,33,16,.24)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_14px_34px_rgba(74,33,16,.32)] active:translate-y-0";
@@ -81,7 +81,7 @@ export default function Storefront() {
     return product.active && matchesCategory && matchesQuery;
   }), [catalog, category, query]);
   const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
-  const total = cart.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
+  const total = cart.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
 
   function openProduct(product: Product) {
     const options = parseProductOptions(product.optionsJson);
@@ -93,14 +93,19 @@ export default function Storefront() {
   function addSelectedProduct() {
     if (!selectedProduct) return;
     const options = parseProductOptions(selectedProduct.optionsJson);
-    const incomplete = options.findIndex((option, index) => (selectedOptions[index]?.length ?? 0) !== optionSelectionCount(option));
+    const incomplete = options.findIndex((option, index) => {
+      const count = selectedOptions[index]?.length ?? 0;
+      const limits = optionSelectionLimits(option);
+      return count < limits.min || count > limits.max;
+    });
     if (incomplete >= 0) {
       const option = options[incomplete];
-      const required = optionSelectionCount(option);
-      return toast.error(`Escolha ${required} ${required === 1 ? "opção" : "opções"} em “${option.name}”.`);
+      const limits = optionSelectionLimits(option);
+      return toast.error(limits.min === limits.max ? `Escolha ${limits.min} ${limits.min === 1 ? "opção" : "opções"} em “${option.name}”.` : `Escolha entre ${limits.min} e ${limits.max} opções em “${option.name}”.`);
     }
     const selections = options.flatMap((option, index) => (selectedOptions[index] ?? []).map((value) => `${option.name}: ${value}`));
-    setCart((current) => [...current, { product: selectedProduct, quantity: 1, selectedOptions: selections, notes: productNotes }]);
+    const extras = options.reduce((sum, option, optionIndex) => sum + option.values.reduce((choiceSum, value) => choiceSum + ((selectedOptions[optionIndex] ?? []).includes(choiceDetails(value, 0).name) ? choicePriceDelta(value) : 0), 0), 0);
+    setCart((current) => [...current, { product: selectedProduct, quantity: 1, unitPrice: selectedProduct.price + extras, selectedOptions: selections, notes: productNotes }]);
     setSelectedProduct(null);
     setCartOpen(true);
     toast.success("Produto adicionado ao carrinho.");
@@ -115,7 +120,8 @@ export default function Storefront() {
 
   const settings = catalog.settings;
   const productOptions = selectedProduct ? parseProductOptions(selectedProduct.optionsJson) : [];
-  const productIsCombo = productOptions.some(isComboOption);
+  const productIsCombo = productOptions.some((option) => isComboOption(option) || option.kind === "addon" || option.values.some((value) => typeof value === "object"));
+  const selectedExtras = productOptions.reduce((sum, option, optionIndex) => sum + option.values.reduce((choiceSum, value) => choiceSum + ((selectedOptions[optionIndex] ?? []).includes(choiceDetails(value, 0).name) ? choicePriceDelta(value) : 0), 0), 0);
   return (
     <div className="min-h-screen bg-[#fbf7f0] text-[#3c2419]">
       <Toaster position="top-center" richColors />
@@ -169,13 +175,13 @@ export default function Storefront() {
               <DialogHeader><DialogTitle className="font-serif text-3xl">{selectedProduct.name}</DialogTitle><DialogDescription className="text-base leading-7 text-[#7a6252]">{selectedProduct.description}</DialogDescription></DialogHeader>
               <ProductOptionsPicker options={productOptions} selections={selectedOptions} onChange={setSelectedOptions} />
               <div><Label htmlFor="product-notes">Observações</Label><textarea id="product-notes" value={productNotes} onChange={(event) => setProductNotes(event.target.value)} placeholder="Ex.: sem granulado" className="mt-2 min-h-20 w-full rounded-2xl border border-[#6a3d24]/15 bg-white p-3 outline-none focus:ring-2 focus:ring-[#8b5d3d]/30" /></div>
-              <Button onClick={addSelectedProduct} disabled={selectedProduct.soldOut} className={`h-13 w-full text-base ${primaryButton}`}>{selectedProduct.soldOut ? "Produto esgotado" : `Adicionar · ${money(selectedProduct.price)}`}</Button>
+              <Button onClick={addSelectedProduct} disabled={selectedProduct.soldOut} className={`h-13 w-full text-base ${primaryButton}`}>{selectedProduct.soldOut ? "Produto esgotado" : `Adicionar · ${money(selectedProduct.price + selectedExtras)}`}</Button>
             </div>
           </div>}
         </DialogContent>
       </Dialog>
 
-      <Sheet open={cartOpen} onOpenChange={setCartOpen}><SheetContent className="w-full max-w-lg border-[#6a3d24]/15 bg-[#fffaf4] sm:max-w-lg"><SheetHeader><SheetTitle className="font-serif text-3xl">Seu carrinho</SheetTitle><SheetDescription>Seu pedido será retirado presencialmente.</SheetDescription></SheetHeader><div className="flex-1 overflow-y-auto px-4">{!cart.length ? <div className="grid h-full place-items-center py-12 text-center text-[#806b5d]"><div><ShoppingBag className="mx-auto mb-4 size-12 opacity-40" /><p>Seu carrinho ainda está vazio.</p></div></div> : <div className="space-y-3">{cart.map((item, index) => <div key={`${item.product.id}-${index}`} className="flex gap-3 rounded-2xl border border-[#6a3d24]/10 bg-white p-3"><ProductImage src={item.product.imageUrl} alt={item.product.name} className="size-20 shrink-0 rounded-xl" /><div className="min-w-0 flex-1"><h3 className="font-semibold">{item.product.name}</h3><p className="truncate text-xs text-[#806b5d]">{item.selectedOptions.join(" · ")}</p><div className="mt-2 flex items-center justify-between"><strong>{money(item.product.price * item.quantity)}</strong><div className="flex items-center gap-2"><button aria-label="Diminuir" onClick={() => updateQuantity(index, -1)} className="grid size-8 place-items-center rounded-full border border-[#6a3d24]/20 bg-[#fffaf4] transition hover:bg-[#f2e4d2]"><Minus className="size-4" /></button><span>{item.quantity}</span><button aria-label="Aumentar" onClick={() => updateQuantity(index, 1)} className="grid size-8 place-items-center rounded-full border border-[#6a3d24]/20 bg-[#fffaf4] transition hover:bg-[#f2e4d2]"><Plus className="size-4" /></button></div></div></div><button aria-label="Excluir" onClick={() => setCart((current) => current.filter((_, i) => i !== index))} className="self-start rounded-full p-2 text-[#9b7b68] transition hover:bg-[#f7e5e2] hover:text-[#9f291f]"><Trash2 className="size-4" /></button></div>)}</div>}</div>{cart.length > 0 && <div className="border-t border-[#6a3d24]/10 p-4"><div className="mb-4 rounded-2xl bg-[#f2e4d2] p-3 text-sm font-medium text-[#63351e]">Pedidos disponíveis somente para retirada na loja. Não realizamos entregas.</div><div className="mb-4 flex items-center justify-between text-lg"><span>Total</span><strong>{money(total)}</strong></div><Button onClick={() => { setCartOpen(false); setCheckout(true); }} className={`h-13 w-full text-base ${primaryButton}`}>Escolher retirada</Button></div>}</SheetContent></Sheet>
+      <Sheet open={cartOpen} onOpenChange={setCartOpen}><SheetContent className="w-full max-w-lg border-[#6a3d24]/15 bg-[#fffaf4] sm:max-w-lg"><SheetHeader><SheetTitle className="font-serif text-3xl">Seu carrinho</SheetTitle><SheetDescription>Seu pedido será retirado presencialmente.</SheetDescription></SheetHeader><div className="flex-1 overflow-y-auto px-4">{!cart.length ? <div className="grid h-full place-items-center py-12 text-center text-[#806b5d]"><div><ShoppingBag className="mx-auto mb-4 size-12 opacity-40" /><p>Seu carrinho ainda está vazio.</p></div></div> : <div className="space-y-3">{cart.map((item, index) => <div key={`${item.product.id}-${index}`} className="flex gap-3 rounded-2xl border border-[#6a3d24]/10 bg-white p-3"><ProductImage src={item.product.imageUrl} alt={item.product.name} className="size-20 shrink-0 rounded-xl" /><div className="min-w-0 flex-1"><h3 className="font-semibold">{item.product.name}</h3><p className="truncate text-xs text-[#806b5d]">{item.selectedOptions.join(" · ")}</p><div className="mt-2 flex items-center justify-between"><strong>{money(item.unitPrice * item.quantity)}</strong><div className="flex items-center gap-2"><button aria-label="Diminuir" onClick={() => updateQuantity(index, -1)} className="grid size-8 place-items-center rounded-full border border-[#6a3d24]/20 bg-[#fffaf4] transition hover:bg-[#f2e4d2]"><Minus className="size-4" /></button><span>{item.quantity}</span><button aria-label="Aumentar" onClick={() => updateQuantity(index, 1)} className="grid size-8 place-items-center rounded-full border border-[#6a3d24]/20 bg-[#fffaf4] transition hover:bg-[#f2e4d2]"><Plus className="size-4" /></button></div></div></div><button aria-label="Excluir" onClick={() => setCart((current) => current.filter((_, i) => i !== index))} className="self-start rounded-full p-2 text-[#9b7b68] transition hover:bg-[#f7e5e2] hover:text-[#9f291f]"><Trash2 className="size-4" /></button></div>)}</div>}</div>{cart.length > 0 && <div className="border-t border-[#6a3d24]/10 p-4"><div className="mb-4 rounded-2xl bg-[#f2e4d2] p-3 text-sm font-medium text-[#63351e]">Pedidos disponíveis somente para retirada na loja. Não realizamos entregas.</div><div className="mb-4 flex items-center justify-between text-lg"><span>Total</span><strong>{money(total)}</strong></div><Button onClick={() => { setCartOpen(false); setCheckout(true); }} className={`h-13 w-full text-base ${primaryButton}`}>Escolher retirada</Button></div>}</SheetContent></Sheet>
 
       <CheckoutDialog open={checkout} onOpenChange={setCheckout} cart={cart} settings={settings} total={total} onConfirmed={(order) => { setCart([]); setCheckout(false); setConfirmation(order); }} />
       <ConfirmationDialog order={confirmation} settings={settings} onClose={() => setConfirmation(null)} />
@@ -185,38 +191,39 @@ export default function Storefront() {
 }
 
 function ProductOptionsPicker({ options, selections, onChange }: { options: ProductOption[]; selections: string[][]; onChange: (options: string[][]) => void }) {
-  function select(optionIndex: number, name: string, required: number) {
+  function select(optionIndex: number, name: string, maximum: number) {
     const next = selections.map((values) => [...values]);
     const current = next[optionIndex] ?? [];
     if (current.includes(name)) next[optionIndex] = current.filter((value) => value !== name);
-    else if (required === 1) next[optionIndex] = [name];
-    else if (current.length < required) next[optionIndex] = [...current, name];
-    else return toast.error(`Você pode escolher até ${required} opções neste grupo.`);
+    else if (maximum === 1) next[optionIndex] = [name];
+    else if (current.length < maximum) next[optionIndex] = [...current, name];
+    else return toast.error(`Você pode escolher até ${maximum} opções neste grupo.`);
     onChange(next);
   }
 
   if (!options.length) return null;
   return <div className="space-y-5">{options.map((option, optionIndex) => {
-    const required = optionSelectionCount(option);
+    const limits = optionSelectionLimits(option);
     const current = selections[optionIndex] ?? [];
-    const combo = isComboOption(option);
-    return <fieldset key={`${option.name}-${optionIndex}`} className={combo ? "overflow-hidden rounded-2xl border border-[#6a3d24]/12 bg-white" : ""}>
-      <div className={combo ? "flex items-start justify-between gap-3 bg-[#f3eadf] p-4" : "mb-2 flex items-center justify-between gap-3"}>
-        <div><legend className="font-semibold">{option.name}</legend>{option.description && <p className="mt-1 text-sm text-[#806b5d]">{option.description}</p>}</div>
-        <div className="flex shrink-0 items-center gap-2"><span className="rounded-full bg-[#5b2c16] px-2.5 py-1 text-xs font-bold text-white">{current.length}/{required}</span><span className="hidden rounded-full bg-[#ead8c3] px-2.5 py-1 text-[10px] font-bold uppercase text-[#6a3d24] sm:inline">Obrigatório</span></div>
+    const rich = isComboOption(option) || option.kind === "addon" || option.values.some((value) => typeof value === "object");
+    const instruction = limits.min === 0 ? `Escolha até ${limits.max} ${limits.max === 1 ? "opção" : "opções"}.` : limits.min === limits.max ? `Escolha ${limits.min} ${limits.min === 1 ? "opção" : "opções"}.` : `Escolha de ${limits.min} a ${limits.max} opções.`;
+    return <fieldset key={`${option.name}-${optionIndex}`} className={rich ? "overflow-hidden rounded-2xl border border-[#6a3d24]/12 bg-white" : ""}>
+      <div className={rich ? "flex items-start justify-between gap-3 bg-[#f3eadf] p-4" : "mb-2 flex items-center justify-between gap-3"}>
+        <div><legend className="font-semibold">{option.name}</legend><p className="mt-1 text-sm text-[#806b5d]">{option.description || instruction}</p></div>
+        <div className="flex shrink-0 items-center gap-2"><span className="rounded-full bg-[#5b2c16] px-2.5 py-1 text-xs font-bold text-white">{current.length}/{limits.max}</span><span className="hidden rounded-full bg-[#ead8c3] px-2.5 py-1 text-[10px] font-bold uppercase text-[#6a3d24] sm:inline">{limits.min === 0 ? "Opcional" : "Obrigatório"}</span></div>
       </div>
-      {combo ? <div className="divide-y divide-[#6a3d24]/10">{option.values.map((value, index) => {
+      {rich ? <div className="divide-y divide-[#6a3d24]/10">{option.values.map((value, index) => {
         const choice = choiceDetails(value, index);
         const selected = current.includes(choice.name);
-        return <button type="button" key={choice.id} onClick={() => select(optionIndex, choice.name, required)} className={`grid w-full grid-cols-[76px_1fr_auto] items-center gap-4 p-4 text-left transition hover:bg-[#fff8ef] ${selected ? "bg-[#f8eee1]" : "bg-white"}`}>
+        return <button type="button" key={choice.id} onClick={() => select(optionIndex, choice.name, limits.max)} className={`grid w-full grid-cols-[76px_1fr_auto] items-center gap-4 p-4 text-left transition hover:bg-[#fff8ef] ${selected ? "bg-[#f8eee1]" : "bg-white"}`}>
           {choice.imageUrl ? <ProductImage src={choice.imageUrl} alt={choice.name} className="aspect-square w-full rounded-xl" /> : <span className="grid aspect-square place-items-center rounded-xl bg-[#f2e4d2] text-[#8b674e]"><Sparkles className="size-5" /></span>}
-          <span><strong className="block leading-tight">{choice.name}</strong>{choice.description && <small className="mt-1 block leading-5 text-[#806b5d]">{choice.description}</small>}</span>
+          <span><strong className="block leading-tight">{choice.name}</strong>{choice.description && <small className="mt-1 block leading-5 text-[#806b5d]">{choice.description}</small>}{choicePriceDelta(choice) > 0 && <small className="mt-1 block font-semibold text-[#7b4a2f]">+ {money(choicePriceDelta(choice))}</small>}</span>
           <span className={`grid size-10 place-items-center rounded-full border transition ${selected ? "border-[#5b2c16] bg-[#5b2c16] text-white" : "border-[#b99b85]/40 bg-white text-[#6b351b]"}`}>{selected ? <Check className="size-5" /> : <Plus className="size-5" />}</span>
         </button>;
       })}</div> : <div className="flex flex-wrap gap-2">{option.values.map((value, index) => {
         const choice = choiceDetails(value, index);
         const selected = current.includes(choice.name);
-        return <button type="button" key={choice.id} onClick={() => select(optionIndex, choice.name, required)} className={`rounded-full border px-4 py-2 text-sm font-medium transition-all hover:-translate-y-0.5 ${selected ? "border-[#5b2c16] bg-[#5b2c16] text-white shadow-md" : "border-[#6a3d24]/20 bg-white hover:border-[#8b674e]/45 hover:shadow-sm"}`}>{choice.name}</button>;
+        return <button type="button" key={choice.id} onClick={() => select(optionIndex, choice.name, limits.max)} className={`rounded-full border px-4 py-2 text-sm font-medium transition-all hover:-translate-y-0.5 ${selected ? "border-[#5b2c16] bg-[#5b2c16] text-white shadow-md" : "border-[#6a3d24]/20 bg-white hover:border-[#8b674e]/45 hover:shadow-sm"}`}>{choice.name}</button>;
       })}</div>}
     </fieldset>;
   })}</div>;

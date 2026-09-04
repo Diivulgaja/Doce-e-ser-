@@ -15,9 +15,10 @@ function parseJsonArray(value: unknown, label: string): unknown[] {
 
 function validateProductOptions(options: unknown[]) {
   if (options.length > 20) throw new Error("Use no máximo 20 grupos de opções por produto.");
+  let totalMaximum = 0;
   for (const rawOption of options) {
     if (!rawOption || typeof rawOption !== "object") throw new Error("Revise as opções do produto.");
-    const option = rawOption as { kind?: unknown; name?: unknown; description?: unknown; selectionCount?: unknown; values?: unknown };
+    const option = rawOption as { kind?: unknown; name?: unknown; description?: unknown; selectionCount?: unknown; minSelections?: unknown; maxSelections?: unknown; values?: unknown };
     const values = Array.isArray(option.values) ? option.values : [];
     const groupName = String(option.name ?? "").trim();
     if (!groupName || groupName.length > 100 || values.length === 0 || values.length > 50) throw new Error("Cada grupo precisa de um nome de até 100 caracteres e de 1 a 50 escolhas.");
@@ -27,15 +28,20 @@ function validateProductOptions(options: unknown[]) {
     for (const value of values) {
       if (typeof value === "string") continue;
       if (!value || typeof value !== "object") throw new Error("Revise os itens do combo.");
-      const choice = value as { description?: unknown; imageUrl?: unknown };
+      const choice = value as { description?: unknown; imageUrl?: unknown; productId?: unknown; priceDelta?: unknown };
       if (String(choice.description ?? "").length > 1000) throw new Error("A descrição de cada opção deve ter até 1.000 caracteres.");
       if (String(choice.imageUrl ?? "").length > 2048) throw new Error("A URL da imagem de uma opção é muito longa.");
+      const linkedProduct = Number(choice.productId ?? 0);
+      if (choice.productId != null && (!Number.isInteger(linkedProduct) || linkedProduct <= 0)) throw new Error("O produto vinculado a uma opção é inválido.");
+      const priceDelta = Number(choice.priceDelta ?? 0);
+      if (!Number.isFinite(priceDelta) || priceDelta < 0 || priceDelta > 10000) throw new Error("O acréscimo de cada opção deve ficar entre R$ 0 e R$ 10.000.");
     }
-    if (option.kind === "combo") {
-      const required = Number(option.selectionCount ?? 1);
-      if (!Number.isInteger(required) || required < 1 || required > values.length || required > 20) throw new Error("A quantidade obrigatória do combo deve ficar entre 1 e 20 e caber no número de escolhas.");
-    }
+    const minimum = Number(option.minSelections ?? (option.kind === "addon" ? 0 : option.selectionCount ?? 1));
+    const maximum = Number(option.maxSelections ?? option.selectionCount ?? 1);
+    if (!Number.isInteger(minimum) || !Number.isInteger(maximum) || minimum < 0 || maximum < 1 || minimum > maximum || maximum > values.length || maximum > 20) throw new Error("O mínimo e o máximo de escolhas precisam caber nas opções do grupo.");
+    totalMaximum += maximum;
   }
+  if (totalMaximum > 20) throw new Error("A soma dos máximos dos grupos deve ser de até 20 escolhas.");
 }
 
 async function getAdminData(supabase: SupabaseClient) {
