@@ -14,35 +14,32 @@ Loja virtual para doces e bolos com pedidos exclusivamente para retirada. Esta v
 ## 1. Criar o Supabase
 
 1. Crie uma conta em https://supabase.com e um novo projeto.
-2. No projeto, abra **SQL Editor**.
-3. Abra o arquivo `supabase/schema.sql` deste projeto, copie todo o conteúdo e execute no SQL Editor.
-4. O script cria as tabelas, regras de segurança, cardápio inicial, função transacional de pedidos, atualização em tempo real e o armazenamento `product-images`.
+2. Em **Authentication > Users**, crie primeiro o e-mail e a senha da proprietária.
+3. No projeto, abra **SQL Editor**.
+4. Abra o arquivo `supabase/schema.sql` deste projeto, copie todo o conteúdo e execute no SQL Editor.
+5. O script cria as tabelas, regras de segurança, cardápio inicial, função transacional de pedidos, atualização em tempo real e o armazenamento `product-images`.
 
 ## 2. Criar o administrador
 
-1. No Supabase, abra **Authentication > Users**.
-2. Clique em **Add user** e crie o e-mail e a senha da pessoa que administrará a loja.
-3. Guarde o mesmo e-mail para a variável `BOOTSTRAP_ADMIN_EMAIL`.
-4. No primeiro login em `/admin`, esse usuário será registrado como administrador. Depois disso, apenas usuários presentes na tabela `admins` terão acesso.
+1. O primeiro e único usuário existente quando o script é executado é registrado como proprietária automaticamente.
+2. Para contas adicionais, inclua o `user_id` e o e-mail manualmente na tabela `admins`.
+3. Apenas contas presentes na tabela `admins` conseguem ler ou alterar os dados privados do painel.
 
 ## 3. Configurar as chaves
 
 No Supabase, abra **Project Settings > API** e copie:
 
 - Project URL;
-- chave pública `anon`/`publishable`;
-- chave secreta `service_role`.
+- chave pública `anon`/`publishable`.
 
 Duplique `.env.example`, renomeie a cópia para `.env.local` e preencha:
 
 ```env
 NEXT_PUBLIC_SUPABASE_URL=https://SEU-PROJETO.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=sua-chave-publica
-SUPABASE_SERVICE_ROLE_KEY=sua-chave-secreta
-BOOTSTRAP_ADMIN_EMAIL=seu-email@exemplo.com
 ```
 
-Nunca publique ou envie a chave `SUPABASE_SERVICE_ROLE_KEY`. O arquivo `.env.local` já está ignorado pelo Git.
+O site não precisa da chave `service_role`: as permissões são controladas pelo login e pelas políticas RLS do Supabase. O arquivo `.env.local` já está ignorado pelo Git.
 
 ## 4. Executar no computador
 
@@ -64,6 +61,7 @@ Depois de entrar em `/admin`:
 3. revise preços, descrições e categorias;
 4. envie as fotos reais pela galeria do celular ou computador;
 5. ative o som e use **Testar alarme**.
+6. use **Instalar painel** dentro da área autenticada para adicioná-lo à tela inicial do celular da proprietária.
 
 ## Banco de dados
 

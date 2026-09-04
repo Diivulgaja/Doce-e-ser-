@@ -29,15 +29,16 @@ function supabaseUrl() {
   return normalizeSupabaseUrl(env("NEXT_PUBLIC_SUPABASE_URL"));
 }
 
-export function getSupabaseAdmin() {
-  return createClient(supabaseUrl(), env("SUPABASE_SERVICE_ROLE_KEY"), {
+export function getSupabasePublic() {
+  return createClient(supabaseUrl(), env("NEXT_PUBLIC_SUPABASE_ANON_KEY"), {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 }
 
-export function getSupabasePublic() {
+export function getSupabaseUser(token: string) {
   return createClient(supabaseUrl(), env("NEXT_PUBLIC_SUPABASE_ANON_KEY"), {
     auth: { autoRefreshToken: false, persistSession: false },
+    global: { headers: { Authorization: `Bearer ${token}` } },
   });
 }
 
@@ -52,20 +53,11 @@ export async function requireAdmin(request: Request) {
   const authorization = request.headers.get("authorization") ?? "";
   const token = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
   if (!token) return null;
-  const url = supabaseUrl();
-  const anonKey = env("NEXT_PUBLIC_SUPABASE_ANON_KEY");
-  const authClient = createClient(url, anonKey, { auth: { autoRefreshToken: false, persistSession: false } });
+  const authClient = getSupabaseUser(token);
   const { data: { user }, error } = await authClient.auth.getUser(token);
   if (error || !user?.email) return null;
-  const admin = getSupabaseAdmin();
-  const { data: adminRows } = await admin.from("admins").select("id,email").limit(1);
-  const bootstrapEmail = process.env.BOOTSTRAP_ADMIN_EMAIL?.toLowerCase();
-  if (!adminRows?.length && bootstrapEmail === user.email.toLowerCase()) {
-    await admin.from("admins").insert({ email: user.email.toLowerCase(), user_id: user.id });
-    return user;
-  }
-  const { data: allowed } = await admin.from("admins").select("id").eq("user_id", user.id).maybeSingle();
-  return allowed ? user : null;
+  const { data: allowed } = await authClient.from("admins").select("id").eq("user_id", user.id).maybeSingle();
+  return allowed ? { user, supabase: authClient } : null;
 }
 
 export const toCategory = (row: Record<string, unknown>) => ({ id: Number(row.id), name: String(row.name), slug: String(row.slug), sortOrder: Number(row.sort_order), active: Boolean(row.active) });

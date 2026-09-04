@@ -1,0 +1,19 @@
+{
+  "id": "/admin",
+  "name": "Painel Doce é Ser",
+  "short_name": "Painel Doce",
+  "description": "Painel privado de pedidos e cardápio da Doce é Ser",
+  "start_url": "/admin",
+  "scope": "/admin",
+  "display": "standalone",
+  "background_color": "#f7f3ed",
+  "theme_color": "#4b2514",
+  "icons": [
+    {
+      "src": "/assets/logo-doce-e-ser.png",
+      "sizes": "768x768",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

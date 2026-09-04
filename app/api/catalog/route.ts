@@ -23,7 +23,10 @@ export async function GET() {
     ]);
     const error = categoryError ?? productError ?? settingsError;
     if (error) throw error;
-    return Response.json({ categories: (categories ?? []).map(toCategory), products: (products ?? []).map(toProduct), settings: toSettings(settings) });
+    return Response.json(
+      { categories: (categories ?? []).map(toCategory), products: (products ?? []).map(toProduct), settings: toSettings(settings) },
+      { headers: { "Cache-Control": "no-store, max-age=0" } },
+    );
   } catch (error) {
     const diagnostic = describeSupabaseError(error);
     console.error("Falha ao carregar o cardápio:", diagnostic);

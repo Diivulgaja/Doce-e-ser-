@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { getSupabaseAdmin, toOrder } from "@/lib/supabase";
+import { getSupabasePublic, toOrder } from "@/lib/supabase";
 
 const orderSchema = z.object({
   customerName: z.string().trim().min(3).max(100),
@@ -7,7 +7,7 @@ const orderSchema = z.object({
   pickupDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   pickupTime: z.string().regex(/^\d{2}:\d{2}$/),
   notes: z.string().trim().max(500).default(""),
-  paymentMethod: z.enum(["PIX", "Cartão", "Dinheiro"]),
+  paymentMethod: z.string().trim().min(1).max(60),
   items: z.array(z.object({ productId: z.number().int().positive(), quantity: z.number().int().min(1).max(30), selectedOptions: z.array(z.string().max(100)).default([]), notes: z.string().max(300).default("") })).min(1).max(40),
 });
 
@@ -17,8 +17,8 @@ export async function GET(request: Request) {
     const number = url.searchParams.get("number")?.trim() ?? "";
     const phone = url.searchParams.get("phone")?.trim() ?? "";
     if (!number || !phone) return Response.json({ error: "Informe telefone e número do pedido." }, { status: 400 });
-    const supabase = getSupabaseAdmin();
-    const { data, error } = await supabase.from("orders").select("*,order_items(*)").eq("order_number", number).eq("phone", phone).maybeSingle();
+    const supabase = getSupabasePublic();
+    const { data, error } = await supabase.rpc("get_pickup_order", { p_order_number: number, p_phone: phone });
     if (error) throw error;
     return data ? Response.json({ order: toOrder(data) }) : Response.json({ error: "Pedido não encontrado." }, { status: 404 });
   } catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Não foi possível consultar." }, { status: 500 }); }
@@ -27,7 +27,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const payload = orderSchema.parse(await request.json());
-    const supabase = getSupabaseAdmin();
+    const supabase = getSupabasePublic();
     const { data, error } = await supabase.rpc("create_pickup_order", {
       p_customer_name: payload.customerName,
       p_phone: payload.phone,
