@@ -322,6 +322,8 @@ drop policy if exists "public read categories" on public.categories;
 create policy "public read categories" on public.categories for select to anon, authenticated using (active = true);
 drop policy if exists "public read products" on public.products;
 create policy "public read products" on public.products for select to anon, authenticated using (active = true);
+drop policy if exists "admins read all products" on public.products;
+create policy "admins read all products" on public.products for select to authenticated using ((select private.is_admin()));
 drop policy if exists "public read settings" on public.store_settings;
 create policy "public read settings" on public.store_settings for select to anon, authenticated using (true);
 
