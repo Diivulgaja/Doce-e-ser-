@@ -80,6 +80,11 @@ export async function POST(request: Request) {
         ? await supabase.from("products").update(values).eq("id", Number(product.id)).select("id").single()
         : await supabase.from("products").insert(values).select("id").single();
       if (result.error) throw result.error;
+    } else if (action === "toggleProductActive") {
+      const id = Number(body.id);
+      if (!Number.isInteger(id) || id <= 0) throw new Error("Produto inválido.");
+      const { error } = await supabase.from("products").update({ active: body.active === true }).eq("id", id).select("id").single();
+      if (error) throw error;
     } else if (action === "deleteProduct") {
       const { error } = await supabase.from("products").delete().eq("id", Number(body.id)).select("id").single(); if (error) throw error;
     } else if (action === "saveCategory") {
