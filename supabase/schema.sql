@@ -39,9 +39,18 @@ create table if not exists public.customers (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.customer_profiles (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  name text not null check (char_length(trim(name)) between 2 and 100),
+  phone text not null default '' check (phone = '' or char_length(phone) between 8 and 15),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 create table if not exists public.orders (
   id bigint generated always as identity primary key,
   order_number text not null unique,
+  user_id uuid references auth.users(id) on delete set null,
   customer_id bigint references public.customers(id),
   customer_name text not null,
   phone text not null,
@@ -53,6 +62,9 @@ create table if not exists public.orders (
   total numeric(10,2) not null check (total >= 0),
   created_at timestamptz not null default now()
 );
+
+alter table public.orders add column if not exists user_id uuid references auth.users(id) on delete set null;
+create sequence if not exists public.order_number_seq as bigint start with 100001;
 
 create table if not exists public.order_items (
   id bigint generated always as identity primary key,
@@ -90,6 +102,7 @@ create index if not exists idx_orders_phone_number on public.orders(phone, order
 create index if not exists idx_order_items_order on public.order_items(order_id);
 create index if not exists idx_order_items_product_id on public.order_items(product_id);
 create index if not exists idx_orders_customer_id on public.orders(customer_id);
+create index if not exists idx_orders_user_created on public.orders(user_id, created_at desc) where user_id is not null;
 
 insert into public.store_settings (id) values (1) on conflict (id) do nothing;
 insert into public.categories (name, slug, sort_order) values
@@ -277,6 +290,7 @@ alter table public.admins enable row level security;
 alter table public.categories enable row level security;
 alter table public.products enable row level security;
 alter table public.customers enable row level security;
+alter table public.customer_profiles enable row level security;
 alter table public.orders enable row level security;
 alter table public.order_items enable row level security;
 alter table public.store_settings enable row level security;
@@ -291,6 +305,41 @@ language sql stable security definer set search_path = ''
 as $$ select exists (select 1 from public.admins where user_id = (select auth.uid())) $$;
 revoke all on function private.is_admin() from public, anon;
 grant execute on function private.is_admin() to authenticated, service_role;
+
+create or replace function private.prepare_customer_order() returns trigger
+language plpgsql set search_path = '' as $$
+begin
+  if new.order_number is null or char_length(new.order_number) > 6 then
+    new.order_number := lpad(nextval('public.order_number_seq')::text, 6, '0');
+  end if;
+  if new.user_id is null then new.user_id := auth.uid(); end if;
+  return new;
+end;
+$$;
+revoke all on function private.prepare_customer_order() from public, anon, authenticated;
+drop trigger if exists prepare_customer_order_before_insert on public.orders;
+create trigger prepare_customer_order_before_insert
+  before insert on public.orders
+  for each row execute function private.prepare_customer_order();
+
+create or replace function private.handle_new_customer() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin
+  insert into public.customer_profiles (user_id, name, phone)
+  values (
+    new.id,
+    coalesce(nullif(trim(new.raw_user_meta_data->>'full_name'), ''), split_part(coalesce(new.email, 'cliente'), '@', 1)),
+    regexp_replace(coalesce(new.raw_user_meta_data->>'phone', ''), '[^0-9]', '', 'g')
+  )
+  on conflict (user_id) do nothing;
+  return new;
+end;
+$$;
+revoke all on function private.handle_new_customer() from public, anon, authenticated;
+drop trigger if exists on_auth_customer_created on auth.users;
+create trigger on_auth_customer_created
+  after insert on auth.users
+  for each row execute function private.handle_new_customer();
 
 do $$
 begin
@@ -307,16 +356,26 @@ grant insert, update, delete on public.categories, public.products to authentica
 grant update on public.store_settings to authenticated;
 grant select, update on public.orders to authenticated;
 grant select on public.order_items, public.admins to authenticated;
+grant select, update on public.customer_profiles to authenticated;
 grant usage, select on sequence public.categories_id_seq, public.products_id_seq to authenticated;
 
 drop policy if exists "admins read own row" on public.admins;
 create policy "admins read own row" on public.admins for select to authenticated using (user_id = auth.uid());
 drop policy if exists "admins read orders" on public.orders;
-create policy "admins read orders" on public.orders for select to authenticated using ((select private.is_admin()));
+drop policy if exists "customers read own orders" on public.orders;
+drop policy if exists "authorized read orders" on public.orders;
+create policy "authorized read orders" on public.orders for select to authenticated using ((select private.is_admin()) or (select auth.uid()) = user_id);
 drop policy if exists "admins update orders" on public.orders;
 create policy "admins update orders" on public.orders for update to authenticated using ((select private.is_admin())) with check ((select private.is_admin()));
 drop policy if exists "admins read order items" on public.order_items;
-create policy "admins read order items" on public.order_items for select to authenticated using ((select private.is_admin()));
+drop policy if exists "customers read own order items" on public.order_items;
+drop policy if exists "authorized read order items" on public.order_items;
+create policy "authorized read order items" on public.order_items for select to authenticated using ((select private.is_admin()) or exists (select 1 from public.orders where orders.id = order_items.order_id and orders.user_id = (select auth.uid())));
+
+drop policy if exists "customers read own profile" on public.customer_profiles;
+create policy "customers read own profile" on public.customer_profiles for select to authenticated using ((select auth.uid()) = user_id);
+drop policy if exists "customers update own profile" on public.customer_profiles;
+create policy "customers update own profile" on public.customer_profiles for update to authenticated using ((select auth.uid()) = user_id) with check ((select auth.uid()) = user_id);
 
 drop policy if exists "public read categories" on public.categories;
 create policy "public read categories" on public.categories for select to anon, authenticated using (active = true);

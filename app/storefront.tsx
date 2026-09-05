@@ -2,7 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
-import { AtSign, Check, ChevronRight, Clock3, MapPin, MessageCircle, Minus, Plus, Search, ShoppingBag, Sparkles, Store, Trash2 } from "lucide-react";
+import { AtSign, Check, ChevronRight, Clock3, LogOut, MapPin, MessageCircle, Minus, Plus, Search, ShoppingBag, Sparkles, Store, Trash2, UserRound } from "lucide-react";
 import { toast } from "sonner";
 import ProductImage from "@/components/product-image";
 import { Button } from "@/components/ui/button";
@@ -14,14 +14,17 @@ import { Toaster } from "@/components/ui/sonner";
 import type { Catalog, Order, Product, ProductOption } from "@/lib/types";
 import { choiceDetails, choicePriceDelta, isComboOption, optionSelectionLimits, parseProductOptions } from "@/lib/product-options";
 import { getSupabaseBrowser } from "@/lib/supabase";
+import type { Session } from "@supabase/supabase-js";
 
 type CartLine = { product: Product; quantity: number; unitPrice: number; selectedOptions: string[]; notes: string };
+type CustomerProfile = { name: string; phone: string };
 const money = (value: number) => new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value);
 const statusLabels: Record<string, string> = { received: "Pedido recebido", confirmed: "Confirmado", preparing: "Em preparação", ready: "Pronto para retirada", picked_up: "Retirado", cancelled: "Cancelado" };
 const primaryButton = "rounded-full bg-gradient-to-r from-[#4a2110] via-[#6b351b] to-[#4a2110] font-semibold text-[#fff8ed] shadow-[0_10px_28px_rgba(74,33,16,.24)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_14px_34px_rgba(74,33,16,.32)] active:translate-y-0";
 const secondaryButton = "rounded-full border border-[#8b674e]/30 bg-white/80 font-semibold text-[#512b18] shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-[#8b674e]/50 hover:bg-white hover:shadow-md active:translate-y-0";
 
 export default function Storefront() {
+  const supabase = useMemo(() => getSupabaseBrowser(), []);
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [category, setCategory] = useState("todos");
   const [query, setQuery] = useState("");
@@ -34,6 +37,9 @@ export default function Storefront() {
   const [confirmation, setConfirmation] = useState<Order | null>(null);
   const [tracking, setTracking] = useState(false);
   const [trackedOrder, setTrackedOrder] = useState<Order | null>(null);
+  const [customerSession, setCustomerSession] = useState<Session | null>(null);
+  const [customerProfile, setCustomerProfile] = useState<CustomerProfile | null>(null);
+  const [accountOpen, setAccountOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
 
@@ -60,7 +66,6 @@ export default function Storefront() {
     const onVisibility = () => { if (document.visibilityState === "visible") refresh(); };
     window.addEventListener("focus", refresh);
     document.addEventListener("visibilitychange", onVisibility);
-    const supabase = getSupabaseBrowser();
     const channel = supabase?.channel("storefront-catalog")
       .on("postgres_changes", { event: "*", schema: "public", table: "categories" }, refresh)
       .on("postgres_changes", { event: "*", schema: "public", table: "products" }, refresh)
@@ -73,7 +78,23 @@ export default function Storefront() {
       document.removeEventListener("visibilitychange", onVisibility);
       if (channel) supabase?.removeChannel(channel);
     };
-  }, [loadCatalog]);
+  }, [loadCatalog, supabase]);
+
+  const loadCustomerProfile = useCallback(async (session: Session | null) => {
+    if (!supabase || !session) { setCustomerProfile(null); return; }
+    const { data } = await supabase.from("customer_profiles").select("name, phone").eq("user_id", session.user.id).maybeSingle();
+    setCustomerProfile(data ? { name: String(data.name), phone: String(data.phone ?? "") } : null);
+  }, [supabase]);
+
+  useEffect(() => {
+    if (!supabase) return;
+    void supabase.auth.getSession().then(({ data }) => { setCustomerSession(data.session); void loadCustomerProfile(data.session); });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setCustomerSession(session);
+      window.setTimeout(() => void loadCustomerProfile(session), 0);
+    });
+    return () => subscription.unsubscribe();
+  }, [loadCustomerProfile, supabase]);
 
   const visibleProducts = useMemo(() => (catalog?.products ?? []).filter((product) => {
     const matchesCategory = category === "todos" || String(product.categoryId) === category;
@@ -132,6 +153,7 @@ export default function Storefront() {
           <nav className="ml-auto hidden items-center gap-6 text-sm font-medium lg:flex">
             <a href="#inicio" className="transition hover:text-[#8b4d2c]">Início</a><a href="#cardapio" className="transition hover:text-[#8b4d2c]">Cardápio</a><button onClick={() => setTracking(true)} className="transition hover:text-[#8b4d2c]">Meus pedidos</button><a href="#loja" className="transition hover:text-[#8b4d2c]">Informações da loja</a>
           </nav>
+          <Button variant="outline" onClick={() => customerSession ? setTracking(true) : setAccountOpen(true)} aria-label={customerSession ? "Abrir minha conta" : "Entrar ou criar conta"} className={`h-11 px-3 sm:px-4 ${secondaryButton}`}><UserRound className="size-4" /><span className="hidden sm:inline">{customerSession ? customerProfile?.name.split(" ")[0] || "Minha conta" : "Entrar"}</span></Button>
           <Button onClick={() => setCartOpen(true)} className={`ml-auto h-11 px-4 lg:ml-2 ${primaryButton}`}><ShoppingBag /> <span className="hidden sm:inline">Carrinho</span><span className="grid size-6 place-items-center rounded-full bg-[#f4d5a6] text-xs text-[#5b2c16]">{cartCount}</span></Button>
         </div>
       </header>
@@ -212,9 +234,10 @@ export default function Storefront() {
 
       <Sheet open={cartOpen} onOpenChange={setCartOpen}><SheetContent className="w-full max-w-lg border-[#6a3d24]/15 bg-[#fffaf4] sm:max-w-lg"><SheetHeader><SheetTitle className="font-serif text-3xl">Seu carrinho</SheetTitle><SheetDescription>Seu pedido será retirado presencialmente.</SheetDescription></SheetHeader><div className="flex-1 overflow-y-auto px-4">{!cart.length ? <div className="grid h-full place-items-center py-12 text-center text-[#806b5d]"><div><ShoppingBag className="mx-auto mb-4 size-12 opacity-40" /><p>Seu carrinho ainda está vazio.</p></div></div> : <div className="space-y-3">{cart.map((item, index) => <div key={`${item.product.id}-${index}`} className="flex gap-3 rounded-2xl border border-[#6a3d24]/10 bg-white p-3"><ProductImage src={item.product.imageUrl} alt={item.product.name} className="size-20 shrink-0 rounded-xl" /><div className="min-w-0 flex-1"><h3 className="font-semibold">{item.product.name}</h3>{item.selectedOptions.length > 0 && <p className="mt-1 line-clamp-2 text-xs leading-5 text-[#806b5d]">{item.selectedOptions.join(" · ")}</p>}<div className="mt-2 flex items-center justify-between"><strong>{money(item.unitPrice * item.quantity)}</strong><div className="flex items-center gap-2"><button aria-label="Diminuir" onClick={() => updateQuantity(index, -1)} className="grid size-8 place-items-center rounded-full border border-[#6a3d24]/20 bg-[#fffaf4] transition hover:bg-[#f2e4d2]"><Minus className="size-4" /></button><span>{item.quantity}</span><button aria-label="Aumentar" onClick={() => updateQuantity(index, 1)} className="grid size-8 place-items-center rounded-full border border-[#6a3d24]/20 bg-[#fffaf4] transition hover:bg-[#f2e4d2]"><Plus className="size-4" /></button></div></div></div><button aria-label="Excluir" onClick={() => setCart((current) => current.filter((_, i) => i !== index))} className="self-start rounded-full p-2 text-[#9b7b68] transition hover:bg-[#f7e5e2] hover:text-[#9f291f]"><Trash2 className="size-4" /></button></div>)}</div>}</div>{cart.length > 0 && <div className="border-t border-[#6a3d24]/10 p-4"><div className="mb-4 rounded-2xl bg-[#f2e4d2] p-3 text-sm font-medium text-[#63351e]">Pedidos disponíveis somente para retirada na loja. Não realizamos entregas.</div><div className="mb-4 flex items-center justify-between text-lg"><span>Total</span><strong>{money(total)}</strong></div><Button onClick={() => { setCartOpen(false); setCheckout(true); }} className={`h-13 w-full text-base ${primaryButton}`}>Escolher retirada</Button></div>}</SheetContent></Sheet>
 
-      <CheckoutDialog open={checkout} onOpenChange={setCheckout} cart={cart} settings={settings} total={total} onConfirmed={(order) => { setCart([]); setCheckout(false); setConfirmation(order); }} />
-      <ConfirmationDialog order={confirmation} settings={settings} onClose={() => setConfirmation(null)} />
-      <TrackingDialog open={tracking} onOpenChange={setTracking} order={trackedOrder} onOrder={setTrackedOrder} />
+      <CheckoutDialog open={checkout} onOpenChange={setCheckout} cart={cart} settings={settings} total={total} session={customerSession} profile={customerProfile} onAccountOpen={() => { setCheckout(false); setAccountOpen(true); }} onConfirmed={(order) => { setCart([]); setCheckout(false); setConfirmation(order); }} />
+      <ConfirmationDialog order={confirmation} settings={settings} savedToAccount={!!customerSession} onClose={() => setConfirmation(null)} />
+      <TrackingDialog open={tracking} onOpenChange={setTracking} order={trackedOrder} onOrder={setTrackedOrder} session={customerSession} onAccountOpen={() => setAccountOpen(true)} />
+      <AccountDialog open={accountOpen} onOpenChange={setAccountOpen} session={customerSession} profile={customerProfile} />
     </div>
   );
 }
@@ -258,7 +281,7 @@ function ProductOptionsPicker({ options, selections, onChange }: { options: Prod
   })}</div>;
 }
 
-function CheckoutDialog({ open, onOpenChange, cart, settings, total, onConfirmed }: { open: boolean; onOpenChange: (open: boolean) => void; cart: CartLine[]; settings: Catalog["settings"]; total: number; onConfirmed: (order: Order) => void }) {
+function CheckoutDialog({ open, onOpenChange, cart, settings, total, session, profile, onAccountOpen, onConfirmed }: { open: boolean; onOpenChange: (open: boolean) => void; cart: CartLine[]; settings: Catalog["settings"]; total: number; session: Session | null; profile: CustomerProfile | null; onAccountOpen: () => void; onConfirmed: (order: Order) => void }) {
   const [submitting, setSubmitting] = useState(false);
   const slots = useMemo(() => {
     const result: string[] = [];
@@ -273,7 +296,7 @@ function CheckoutDialog({ open, onOpenChange, cart, settings, total, onConfirmed
     event.preventDefault(); setSubmitting(true);
     const form = new FormData(event.currentTarget);
     try {
-      const response = await fetch("/api/orders", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ customerName: form.get("name"), phone: form.get("phone"), pickupDate: form.get("date"), pickupTime: form.get("time"), notes: form.get("notes"), paymentMethod: form.get("payment"), items: cart.map((item) => ({ productId: item.product.id, quantity: item.quantity, selectedOptions: item.selectedOptions, notes: item.notes })) }) });
+      const response = await fetch("/api/orders", { method: "POST", headers: { "content-type": "application/json", ...(session ? { authorization: `Bearer ${session.access_token}` } : {}) }, body: JSON.stringify({ customerName: form.get("name"), phone: form.get("phone"), pickupDate: form.get("date"), pickupTime: form.get("time"), notes: form.get("notes"), paymentMethod: form.get("payment"), items: cart.map((item) => ({ productId: item.product.id, quantity: item.quantity, selectedOptions: item.selectedOptions, notes: item.notes })) }) });
       const data = await response.json(); if (!response.ok) throw new Error(data.error);
       onConfirmed(data.order);
     } catch (error) { toast.error(error instanceof Error ? error.message : "Não foi possível finalizar."); } finally { setSubmitting(false); }
@@ -282,10 +305,11 @@ function CheckoutDialog({ open, onOpenChange, cart, settings, total, onConfirmed
     <DialogContent className="max-h-[94vh] overflow-y-auto rounded-3xl bg-[#fffaf4] sm:max-w-2xl">
       <DialogHeader><DialogTitle className="font-serif text-3xl">Finalizar pedido</DialogTitle><DialogDescription>Escolha quando você virá retirar na {settings.storeName}.</DialogDescription></DialogHeader>
       <div className="grid grid-cols-3 gap-2 text-center text-[11px] font-bold uppercase tracking-wide"><span className="rounded-full bg-[#e8eee3] px-2 py-2 text-[#477444]">✓ Carrinho</span><span className="rounded-full bg-[#5b2c16] px-2 py-2 text-white">2 · Retirada</span><span className="rounded-full bg-[#eee7df] px-2 py-2 text-[#8b7668]">3 · Confirmação</span></div>
+      {session ? <div className="flex items-center gap-3 rounded-2xl border border-[#477444]/15 bg-[#edf5eb] p-3 text-sm text-[#356333]"><span className="grid size-9 shrink-0 place-items-center rounded-full bg-white"><Check className="size-4" /></span><span><strong className="block">Pedido salvo na sua conta</strong>Você poderá acompanhar sem digitar o código.</span></div> : <button type="button" onClick={onAccountOpen} className="flex w-full items-center gap-3 rounded-2xl border border-[#8b5d3d]/20 bg-white p-3 text-left text-sm transition hover:bg-[#fff7ed]"><span className="grid size-9 shrink-0 place-items-center rounded-full bg-[#f2e4d2]"><UserRound className="size-4" /></span><span className="flex-1"><strong className="block">Entre para salvar seus pedidos</strong>Acompanhe todo o histórico em qualquer aparelho.</span><ChevronRight className="size-4" /></button>}
       <form onSubmit={submit} className="grid gap-4 sm:grid-cols-2">
         <div className="sm:col-span-2 rounded-2xl bg-[#f2e4d2] p-3 text-sm font-semibold text-[#63351e]">Somente retirada na loja · não solicitamos endereço.</div>
-        <label className="grid gap-2"><span className="font-medium">Nome completo</span><Input name="name" required minLength={3} autoComplete="name" className="h-12 bg-white" /></label>
-        <label className="grid gap-2"><span className="font-medium">Telefone / WhatsApp</span><Input name="phone" required minLength={8} inputMode="tel" autoComplete="tel" className="h-12 bg-white" /></label>
+        <label className="grid gap-2"><span className="font-medium">Nome completo</span><Input name="name" required minLength={3} autoComplete="name" defaultValue={profile?.name ?? ""} className="h-12 bg-white" /></label>
+        <label className="grid gap-2"><span className="font-medium">Telefone / WhatsApp</span><Input name="phone" required minLength={8} inputMode="tel" autoComplete="tel" defaultValue={profile?.phone ?? ""} className="h-12 bg-white" /></label>
         <label className="grid gap-2"><span className="font-medium">Data de retirada</span><Input type="date" name="date" min={minDate} required className="h-12 bg-white" /></label>
         <label className="grid gap-2"><span className="font-medium">Horário</span><select name="time" required defaultValue="" className="h-12 rounded-md border bg-white px-3"><option value="" disabled>Selecione</option>{slots.map((slot) => <option key={slot}>{slot}</option>)}</select></label>
         <label className="grid gap-2 sm:col-span-2"><span className="font-medium">Pagamento</span><select name="payment" className="h-12 rounded-md border bg-white px-3">{(JSON.parse(settings.paymentMethodsJson || "[]") as string[]).map((method) => <option key={method}>{method}</option>)}</select><small className="text-[#806b5d]">Pagamento realizado na retirada.</small></label>
@@ -297,12 +321,65 @@ function CheckoutDialog({ open, onOpenChange, cart, settings, total, onConfirmed
   </Dialog>;
 }
 
-function ConfirmationDialog({ order, settings, onClose }: { order: Order | null; settings: Catalog["settings"]; onClose: () => void }) {
-  return <Dialog open={!!order} onOpenChange={(open) => !open && onClose()}><DialogContent className="rounded-3xl bg-[#fffaf4] text-center sm:max-w-lg">{order && <><div className="mx-auto grid size-16 place-items-center rounded-full bg-[#dcebd8] text-[#2d6428]"><Check className="size-8" /></div><DialogHeader><DialogTitle className="text-center font-serif text-3xl">Pedido #{order.orderNumber}</DialogTitle><DialogDescription className="text-center text-base leading-7">Pedido recebido! Estamos preparando tudo com carinho. Retire seu pedido na Doce é Ser no horário escolhido.</DialogDescription></DialogHeader><div className="rounded-2xl bg-white p-4 text-left"><p><strong>Retirada:</strong> {new Date(`${order.pickupDate}T12:00:00`).toLocaleDateString("pt-BR")} às {order.pickupTime}</p><p className="mt-2"><strong>Pagamento:</strong> {order.paymentMethod} na retirada</p><p className="mt-2"><strong>Total:</strong> {money(order.total)}</p><p className="mt-2"><strong>Local:</strong> {settings.address}</p></div><a href={`https://wa.me/${settings.whatsapp.replace(/\D/g, "")}`} target="_blank" rel="noreferrer"><Button className="w-full rounded-full bg-[#1f9d55] text-white">Falar com a Doce é Ser pelo WhatsApp</Button></a></>}</DialogContent></Dialog>;
+function ConfirmationDialog({ order, settings, savedToAccount, onClose }: { order: Order | null; settings: Catalog["settings"]; savedToAccount: boolean; onClose: () => void }) {
+  return <Dialog open={!!order} onOpenChange={(open) => !open && onClose()}><DialogContent className="rounded-3xl bg-[#fffaf4] text-center sm:max-w-lg">{order && <><div className="mx-auto grid size-16 place-items-center rounded-full bg-[#dcebd8] text-[#2d6428]"><Check className="size-8" /></div><DialogHeader><DialogTitle className="text-center font-serif text-3xl">Pedido <span className="whitespace-nowrap">#{order.orderNumber}</span></DialogTitle><DialogDescription className="text-center text-base leading-7">Pedido recebido! Estamos preparando tudo com carinho. Retire seu pedido na Doce é Ser no horário escolhido.</DialogDescription></DialogHeader>{savedToAccount && <div className="rounded-2xl bg-[#edf5eb] p-3 text-sm font-semibold text-[#356333]">Este pedido já está salvo em “Meus pedidos”.</div>}<div className="rounded-2xl bg-white p-4 text-left"><p><strong>Retirada:</strong> {new Date(`${order.pickupDate}T12:00:00`).toLocaleDateString("pt-BR")} às {order.pickupTime}</p><p className="mt-2"><strong>Pagamento:</strong> {order.paymentMethod} na retirada</p><p className="mt-2"><strong>Total:</strong> {money(order.total)}</p><p className="mt-2"><strong>Local:</strong> {settings.address}</p></div><a href={`https://wa.me/${settings.whatsapp.replace(/\D/g, "")}`} target="_blank" rel="noreferrer"><Button className="w-full rounded-full bg-[#1f9d55] text-white">Falar com a Doce é Ser pelo WhatsApp</Button></a></>}</DialogContent></Dialog>;
 }
 
-function TrackingDialog({ open, onOpenChange, order, onOrder }: { open: boolean; onOpenChange: (open: boolean) => void; order: Order | null; onOrder: (order: Order | null) => void }) {
+function TrackingDialog({ open, onOpenChange, order, onOrder, session, onAccountOpen }: { open: boolean; onOpenChange: (open: boolean) => void; order: Order | null; onOrder: (order: Order | null) => void; session: Session | null; onAccountOpen: () => void }) {
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [loadingOrders, setLoadingOrders] = useState(false);
+  useEffect(() => {
+    if (!open || !session) return;
+    let active = true;
+    const load = async () => {
+      setLoadingOrders(true);
+      try {
+        const response = await fetch("/api/orders", { cache: "no-store", headers: { authorization: `Bearer ${session.access_token}` } });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error);
+        if (active) setOrders(data.orders ?? []);
+      } catch (error) { if (active) toast.error(error instanceof Error ? error.message : "Não foi possível carregar seus pedidos."); }
+      finally { if (active) setLoadingOrders(false); }
+    };
+    void load();
+    const timer = window.setInterval(load, 15000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [open, session]);
   async function track(event: FormEvent<HTMLFormElement>) { event.preventDefault(); const form = new FormData(event.currentTarget); const response = await fetch(`/api/orders?number=${encodeURIComponent(String(form.get("number")))}&phone=${encodeURIComponent(String(form.get("phone")))}`); const data = await response.json(); if (!response.ok) return toast.error(data.error); onOrder(data.order); }
   const stages = ["received", "confirmed", "preparing", "ready", "picked_up"];
-  return <Dialog open={open} onOpenChange={(value) => { onOpenChange(value); if (!value) onOrder(null); }}><DialogContent className="rounded-3xl bg-[#fffaf4] sm:max-w-lg"><DialogHeader><DialogTitle className="font-serif text-3xl">Meus pedidos</DialogTitle><DialogDescription>Acompanhe usando o telefone e o número do pedido.</DialogDescription></DialogHeader>{!order ? <form onSubmit={track} className="space-y-4"><label className="grid gap-2"><span>Número do pedido</span><Input name="number" placeholder="Ex.: 1024" required /></label><label className="grid gap-2"><span>Telefone / WhatsApp</span><Input name="phone" required /></label><Button className={`h-12 w-full ${primaryButton}`}>Consultar pedido</Button></form> : <div><div className="rounded-2xl bg-white p-4"><p className="text-sm text-[#806b5d]">Pedido #{order.orderNumber}</p><p className="mt-1 font-serif text-2xl">{statusLabels[order.status]}</p><p className="mt-2 text-sm">Retirada em {new Date(`${order.pickupDate}T12:00:00`).toLocaleDateString("pt-BR")} às {order.pickupTime}</p></div>{order.status !== "cancelled" && <div className="mt-5 flex justify-between">{stages.map((stage, index) => { const active = index <= stages.indexOf(order.status); return <div key={stage} className="flex flex-1 flex-col items-center"><span className={`grid size-8 place-items-center rounded-full ${active ? "bg-[#5b2c16] text-white" : "bg-[#e9ddd2] text-[#9c8779]"}`}>{active ? <Check className="size-4" /> : index + 1}</span>{index < stages.length - 1 && <span />}</div>; })}</div>}<Button variant="outline" onClick={() => onOrder(null)} className={`mt-6 w-full ${secondaryButton}`}>Consultar outro pedido</Button></div>}</DialogContent></Dialog>;
+  const details = order && <div><div className="rounded-2xl border border-[#6a3d24]/10 bg-white p-4"><div className="flex items-start justify-between gap-3"><div><p className="text-sm text-[#806b5d]">Pedido #{order.orderNumber}</p><p className="mt-1 font-serif text-2xl">{statusLabels[order.status]}</p></div><strong>{money(order.total)}</strong></div><p className="mt-2 text-sm">Retirada em {new Date(`${order.pickupDate}T12:00:00`).toLocaleDateString("pt-BR")} às {order.pickupTime}</p>{order.items.length > 0 && <div className="mt-4 border-t border-[#6a3d24]/10 pt-3 text-sm">{order.items.map((item) => <p key={item.id} className="py-1">{item.quantity}× {item.productName}</p>)}</div>}</div>{order.status !== "cancelled" && <div className="mt-5 flex justify-between">{stages.map((stage, index) => { const active = index <= stages.indexOf(order.status); return <div key={stage} className="flex flex-1 flex-col items-center"><span className={`grid size-8 place-items-center rounded-full ${active ? "bg-[#5b2c16] text-white" : "bg-[#e9ddd2] text-[#9c8779]"}`}>{active ? <Check className="size-4" /> : index + 1}</span></div>; })}</div>}<Button variant="outline" onClick={() => onOrder(null)} className={`mt-6 w-full ${secondaryButton}`}>{session ? "Voltar ao histórico" : "Consultar outro pedido"}</Button></div>;
+  return <Dialog open={open} onOpenChange={(value) => { onOpenChange(value); if (!value) onOrder(null); }}><DialogContent className="max-h-[92vh] overflow-y-auto rounded-3xl bg-[#fffaf4] sm:max-w-xl"><DialogHeader><DialogTitle className="font-serif text-3xl">Meus pedidos</DialogTitle><DialogDescription>{session ? "Seu histórico fica salvo e é atualizado automaticamente." : "Entre na sua conta para ver todos os pedidos sem digitar códigos."}</DialogDescription></DialogHeader>{order ? details : session ? <div>{loadingOrders && !orders.length ? <div className="rounded-2xl border border-dashed p-8 text-center text-[#806b5d]">Carregando seus pedidos…</div> : orders.length ? <div className="space-y-3">{orders.map((item) => <button key={item.id} onClick={() => onOrder(item)} className="flex w-full items-center gap-4 rounded-2xl border border-[#6a3d24]/10 bg-white p-4 text-left transition hover:-translate-y-0.5 hover:border-[#8b674e]/30 hover:shadow-md"><span className="grid size-11 shrink-0 place-items-center rounded-full bg-[#f2e4d2] font-bold text-[#5b2c16]">#{item.orderNumber.slice(-3)}</span><span className="min-w-0 flex-1"><strong className="block">Pedido #{item.orderNumber}</strong><small className="text-[#806b5d]">{new Date(`${item.pickupDate}T12:00:00`).toLocaleDateString("pt-BR")} às {item.pickupTime} · {statusLabels[item.status]}</small></span><strong>{money(item.total)}</strong><ChevronRight className="size-4" /></button>)}</div> : <div className="rounded-2xl border border-dashed p-8 text-center text-[#806b5d]"><ShoppingBag className="mx-auto mb-3 size-9 opacity-40" /><p>Nenhum pedido salvo nesta conta ainda.</p></div>}<Button variant="ghost" onClick={() => getSupabaseBrowser()?.auth.signOut()} className="mt-5 w-full rounded-full text-[#806b5d]"><LogOut className="size-4" /> Sair da conta</Button></div> : <div className="space-y-5"><Button onClick={() => { onOpenChange(false); onAccountOpen(); }} className={`h-12 w-full ${primaryButton}`}><UserRound className="size-4" /> Entrar ou criar conta</Button><div className="flex items-center gap-3 text-xs uppercase tracking-widest text-[#a08a7b]"><span className="h-px flex-1 bg-[#6a3d24]/10" />ou consulte um pedido<span className="h-px flex-1 bg-[#6a3d24]/10" /></div><form onSubmit={track} className="space-y-4"><label className="grid gap-2"><span>Código do pedido</span><Input name="number" inputMode="numeric" placeholder="Ex.: 100124" required /></label><label className="grid gap-2"><span>Telefone / WhatsApp</span><Input name="phone" inputMode="tel" autoComplete="tel" required /></label><Button variant="outline" className={`h-12 w-full ${secondaryButton}`}>Consultar pedido</Button></form></div>}</DialogContent></Dialog>;
+}
+
+function AccountDialog({ open, onOpenChange, session, profile }: { open: boolean; onOpenChange: (open: boolean) => void; session: Session | null; profile: CustomerProfile | null }) {
+  const supabase = useMemo(() => getSupabaseBrowser(), []);
+  const [mode, setMode] = useState<"login" | "signup">("login");
+  const [loading, setLoading] = useState(false);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!supabase) return toast.error("A conta está temporariamente indisponível.");
+    const form = new FormData(event.currentTarget);
+    const email = String(form.get("email") ?? "").trim();
+    const password = String(form.get("password") ?? "");
+    setLoading(true);
+    try {
+      if (mode === "signup") {
+        const fullName = String(form.get("name") ?? "").trim();
+        const phone = String(form.get("phone") ?? "").replace(/\D/g, "");
+        const { data, error } = await supabase.auth.signUp({ email, password, options: { data: { full_name: fullName, phone } } });
+        if (error) throw error;
+        if (data.session) { toast.success("Conta criada. Seus próximos pedidos serão salvos aqui."); onOpenChange(false); }
+        else { toast.success("Conta criada! Confirme o e-mail recebido para entrar.", { duration: 7000 }); setMode("login"); }
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+        toast.success("Bem-vindo de volta!");
+        onOpenChange(false);
+      }
+    } catch (error) { toast.error(error instanceof Error ? error.message : "Não foi possível acessar a conta."); }
+    finally { setLoading(false); }
+  }
+
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="max-h-[92vh] overflow-y-auto rounded-3xl bg-[#fffaf4] sm:max-w-md">{session ? <div className="space-y-5 text-center"><span className="mx-auto grid size-16 place-items-center rounded-full bg-[#f2e4d2]"><UserRound className="size-7" /></span><DialogHeader><DialogTitle className="text-center font-serif text-3xl">{profile?.name || "Minha conta"}</DialogTitle><DialogDescription className="text-center">Seus pedidos ficam protegidos e disponíveis em qualquer aparelho.</DialogDescription></DialogHeader><Button variant="outline" onClick={() => supabase?.auth.signOut()} className={`w-full ${secondaryButton}`}><LogOut className="size-4" /> Sair da conta</Button></div> : <><DialogHeader><DialogTitle className="font-serif text-3xl">{mode === "login" ? "Entrar na conta" : "Criar minha conta"}</DialogTitle><DialogDescription>{mode === "login" ? "Acesse todo o seu histórico de pedidos." : "Seus próximos pedidos ficarão salvos em qualquer aparelho."}</DialogDescription></DialogHeader><div className="grid grid-cols-2 rounded-full bg-[#eee5dc] p-1 text-sm font-semibold"><button type="button" onClick={() => setMode("login")} className={`rounded-full px-4 py-2.5 transition ${mode === "login" ? "bg-white shadow-sm" : "text-[#806b5d]"}`}>Entrar</button><button type="button" onClick={() => setMode("signup")} className={`rounded-full px-4 py-2.5 transition ${mode === "signup" ? "bg-white shadow-sm" : "text-[#806b5d]"}`}>Criar conta</button></div><form onSubmit={submit} className="space-y-4">{mode === "signup" && <><label className="grid gap-2"><span className="font-medium">Nome completo</span><Input name="name" autoComplete="name" minLength={2} required /></label><label className="grid gap-2"><span className="font-medium">Telefone / WhatsApp</span><Input name="phone" inputMode="tel" autoComplete="tel" minLength={8} required /></label></>}<label className="grid gap-2"><span className="font-medium">E-mail</span><Input type="email" name="email" autoComplete="email" required /></label><label className="grid gap-2"><span className="font-medium">Senha</span><Input type="password" name="password" autoComplete={mode === "login" ? "current-password" : "new-password"} minLength={6} required /><small className="text-[#806b5d]">Mínimo de 6 caracteres.</small></label><Button disabled={loading} className={`h-12 w-full ${primaryButton}`}>{loading ? "Aguarde…" : mode === "login" ? "Entrar" : "Criar conta"}</Button></form></>}</DialogContent></Dialog>;
 }
