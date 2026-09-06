@@ -25,33 +25,19 @@ function mercadoPagoOrderClient() {
   return new Order(config);
 }
 
-function webhookUrl() {
-  const configured = process.env.NEXT_PUBLIC_SITE_URL?.trim().replace(/\/$/, "");
-  const vercel = process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim() || process.env.VERCEL_URL?.trim();
-  const base = configured || (vercel ? `https://${vercel.replace(/^https?:\/\//, "").replace(/\/$/, "")}` : "");
-  if (!base) throw new Error("Variável NEXT_PUBLIC_SITE_URL não configurada.");
-  return `${base}/api/payments/mercado-pago/webhook`;
-}
-
 export async function createMercadoPagoPix(input: {
   reference: string;
   idempotencyKey: string;
   amount: number;
   email: string;
-  customerName: string;
 }) {
-  const nameParts = input.customerName.trim().split(/\s+/);
-  const firstName = nameParts.shift() ?? input.customerName;
-  const lastName = nameParts.join(" ") || undefined;
   return mercadoPagoOrderClient().create({
     body: {
       type: "online",
       total_amount: input.amount.toFixed(2),
       external_reference: input.reference,
       processing_mode: "automatic",
-      description: `Pedido Doce é Ser ${input.reference.slice(0, 8)}`,
-      payer: { email: input.email, first_name: firstName, last_name: lastName },
-      shipment: { mode: "custom", local_pickup: true, free_shipping: true },
+      payer: { email: input.email },
       transactions: {
         payments: [{
           amount: input.amount.toFixed(2),
@@ -59,7 +45,6 @@ export async function createMercadoPagoPix(input: {
           payment_method: { id: "pix", type: "bank_transfer" },
         }],
       },
-      config: { online: { callback_url: webhookUrl() } },
     },
     requestOptions: { idempotencyKey: input.idempotencyKey },
   });
