@@ -63,13 +63,27 @@ export default function AdminDashboard() {
   }, []);
 
   const playAlarm = useCallback(() => {
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+      const message = new SpeechSynthesisUtterance("Chegou pedido Doce é Ser");
+      const voices = window.speechSynthesis.getVoices();
+      message.lang = "pt-BR";
+      message.voice = voices.find((voice) => voice.lang.toLowerCase().startsWith("pt-br"))
+        ?? voices.find((voice) => voice.lang.toLowerCase().startsWith("pt"))
+        ?? null;
+      message.volume = Math.max(.2, volume);
+      message.rate = .88;
+      message.pitch = 1.02;
+      window.speechSynthesis.speak(message);
+    }
+
     const AudioCtor = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     if (!AudioCtor) return;
     const context = new AudioCtor();
     const master = context.createGain();
     master.gain.setValueAtTime(Math.max(.01, volume * .42), context.currentTime);
     master.connect(context.destination);
-    const notes = [{ frequency: 784, start: 0, duration: .34 }, { frequency: 988, start: .42, duration: .36 }, { frequency: 1175, start: .88, duration: .62 }];
+    const notes = [{ frequency: 784, start: 0, duration: .24 }, { frequency: 988, start: .29, duration: .28 }];
     notes.forEach(({ frequency, start, duration }) => {
       const oscillator = context.createOscillator();
       const gain = context.createGain();
@@ -82,7 +96,7 @@ export default function AdminDashboard() {
       oscillator.start(context.currentTime + start);
       oscillator.stop(context.currentTime + start + duration);
     });
-    window.setTimeout(() => void context.close(), 1800);
+    window.setTimeout(() => void context.close(), 900);
   }, [volume]);
 
   const load = useCallback(async (poll = false) => {
@@ -107,8 +121,12 @@ export default function AdminDashboard() {
     return () => { clearInterval(timer); if (channel) supabase?.removeChannel(channel); };
   }, [load, session, supabase]);
   useEffect(() => {
-    if (alertOrder && soundOn) { playAlarm(); alarmRef.current = setInterval(playAlarm, 3200); }
-    return () => { if (alarmRef.current) clearInterval(alarmRef.current); alarmRef.current = null; };
+    if (alertOrder && soundOn) { playAlarm(); alarmRef.current = setInterval(playAlarm, 4800); }
+    return () => {
+      if (alarmRef.current) clearInterval(alarmRef.current);
+      alarmRef.current = null;
+      if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+    };
   }, [alertOrder, soundOn, playAlarm]);
 
   async function action(payload: Record<string, unknown>, success: string) {
@@ -170,7 +188,7 @@ export default function AdminDashboard() {
     {menuOpen && <button aria-label="Fechar menu" onClick={() => setMenuOpen(false)} className="fixed inset-0 z-40 bg-black/30 lg:hidden" />}
     <main className="lg:pl-72"><header className="sticky top-0 z-30 flex h-20 items-center gap-4 border-b border-[#53311d]/10 bg-[#f7f3ed]/95 px-4 backdrop-blur sm:px-7"><button onClick={() => setMenuOpen(true)} className="rounded-full p-2 transition hover:bg-white lg:hidden"><Menu /></button><div><p className="font-serif text-2xl">{nav.find((item) => item.value === tab)?.label}</p><p className="text-xs text-[#846d5e]">Olá, {data.user.displayName.split(" ")[0]}</p></div><div className="ml-auto flex items-center gap-3"><Button variant="outline" onClick={() => { const next = !soundOn; setSoundOn(next); if (next) setTimeout(playAlarm, 0); }} className="rounded-full bg-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">{soundOn ? <Volume2 /> : <VolumeX />}<span className="hidden sm:inline">{soundOn ? "Som ativo" : "Ativar som"}</span></Button></div></header>
       <div className="p-4 sm:p-7 lg:p-9">
-        {tab === "dashboard" && <section><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Metric label="Pedidos novos" value={String(data.orders.filter((order) => order.status === "received").length)} icon={BellRing} tone="red" /><Metric label="Em preparação" value={String(data.orders.filter((order) => order.status === "preparing").length)} icon={Clock3} /><Metric label="Prontos" value={String(data.orders.filter((order) => order.status === "ready").length)} icon={CheckCircle2} tone="green" /><Metric label="Vendas de hoje" value={money(revenue)} icon={ShoppingBag} /></div><div className="mt-7 grid gap-6 xl:grid-cols-[1.25fr_.75fr]"><Panel title="Pedidos recentes" action={<button onClick={() => setTab("orders")} className="text-sm font-semibold text-[#7b4a2f]">Ver todos</button>}><OrderList orders={data.orders.slice(0, 5)} onStatus={updateOrderStatus} /></Panel><Panel title="Alarme de pedidos"><div className="space-y-5"><div className="flex items-center justify-between"><div><p className="font-semibold">Som do painel</p><p className="text-sm text-[#806b5d]">Repete até aceitar o pedido.</p></div><Switch checked={soundOn} onCheckedChange={(checked) => { setSoundOn(checked); if (checked) setTimeout(playAlarm, 0); }} /></div><label className="block"><span className="text-sm font-medium">Volume</span><input type="range" min="0" max="1" step=".05" value={volume} onChange={(event) => setVolume(Number(event.target.value))} className="mt-2 w-full accent-[#5b2c16]" /></label><Button variant="outline" onClick={playAlarm} disabled={!soundOn} className="w-full">Testar novo alarme</Button><p className="rounded-xl bg-[#efe5d9] p-3 text-xs leading-5 text-[#725844]">Mantenha o painel aberto e o som ativado. O alerta visual e o toque só param quando você aceita o pedido.</p></div></Panel></div></section>}
+        {tab === "dashboard" && <section><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Metric label="Pedidos novos" value={String(data.orders.filter((order) => order.status === "received").length)} icon={BellRing} tone="red" /><Metric label="Em preparação" value={String(data.orders.filter((order) => order.status === "preparing").length)} icon={Clock3} /><Metric label="Prontos" value={String(data.orders.filter((order) => order.status === "ready").length)} icon={CheckCircle2} tone="green" /><Metric label="Vendas de hoje" value={money(revenue)} icon={ShoppingBag} /></div><div className="mt-7 grid gap-6 xl:grid-cols-[1.25fr_.75fr]"><Panel title="Pedidos recentes" action={<button onClick={() => setTab("orders")} className="text-sm font-semibold text-[#7b4a2f]">Ver todos</button>}><OrderList orders={data.orders.slice(0, 5)} onStatus={updateOrderStatus} /></Panel><Panel title="Alarme de pedidos"><div className="space-y-5"><div className="flex items-center justify-between"><div><p className="font-semibold">Alarme falado</p><p className="text-sm text-[#806b5d]">“Chegou pedido Doce é Ser” até aceitar.</p></div><Switch checked={soundOn} onCheckedChange={(checked) => { setSoundOn(checked); if (checked) setTimeout(playAlarm, 0); }} /></div><label className="block"><span className="text-sm font-medium">Volume</span><input type="range" min="0" max="1" step=".05" value={volume} onChange={(event) => setVolume(Number(event.target.value))} className="mt-2 w-full accent-[#5b2c16]" /></label><Button variant="outline" onClick={playAlarm} disabled={!soundOn} className="w-full">Testar voz do alarme</Button><p className="rounded-xl bg-[#efe5d9] p-3 text-xs leading-5 text-[#725844]">Mantenha o painel aberto e o som ativado. A voz e o alerta visual se repetem e só param quando você aceita o pedido.</p></div></Panel></div></section>}
         {tab === "orders" && <Panel title="Todos os pedidos" action={<span className="text-sm text-[#806b5d]">Atualização automática</span>}><OrderList orders={data.orders} onStatus={updateOrderStatus} detailed /></Panel>}
         {tab === "menu" && <Panel title="Produtos" action={<Button onClick={() => setProductEditor({ categoryId: data.categories[0]?.id, active: true, soldOut: false, featured: false, imageUrl: "sprite:0", price: 0, optionsJson: "[]", sortOrder: data.products.length })} className={adminPrimaryButton}><Plus />Novo produto</Button>}>
           <div className="mb-4 rounded-2xl border border-[#8b674e]/15 bg-[#f3e8da] px-4 py-3 text-sm text-[#674733]">Use o botão <strong>Visível/Oculto</strong> para atualizar o cardápio sem abrir a edição do produto.</div>
