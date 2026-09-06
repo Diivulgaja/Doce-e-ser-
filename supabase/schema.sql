@@ -507,6 +507,10 @@ alter table public.orders enable row level security;
 alter table public.order_items enable row level security;
 alter table public.store_settings enable row level security;
 
+revoke all on table public.customers from anon, authenticated;
+drop policy if exists "deny direct customer access" on public.customers;
+create policy "deny direct customer access" on public.customers for all to anon, authenticated using (false) with check (false);
+
 drop function if exists public.is_admin() cascade;
 create schema if not exists private;
 revoke all on schema private from public, anon;
