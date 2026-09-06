@@ -2,7 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
-import { AtSign, Check, ChevronRight, Clock3, Copy, ExternalLink, Loader2, LogOut, MapPin, MessageCircle, Minus, Plus, QrCode, Search, ShieldCheck, ShoppingBag, Sparkles, Store, Trash2, UserRound } from "lucide-react";
+import { ArrowLeft, ArrowRight, AtSign, Check, ChevronRight, Clock3, Copy, ExternalLink, Loader2, LogOut, MapPin, MessageCircle, Minus, Plus, QrCode, Search, ShieldCheck, ShoppingBag, Sparkles, Store, Trash2, UserRound } from "lucide-react";
 import { toast } from "sonner";
 import ProductImage from "@/components/product-image";
 import { Button } from "@/components/ui/button";
@@ -42,6 +42,7 @@ export default function Storefront() {
   const [customerSession, setCustomerSession] = useState<Session | null>(null);
   const [customerProfile, setCustomerProfile] = useState<CustomerProfile | null>(null);
   const [accountOpen, setAccountOpen] = useState(false);
+  const [heroIndex, setHeroIndex] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
 
@@ -104,8 +105,20 @@ export default function Storefront() {
     const matchesQuery = !normalizedQuery || `${product.name} ${product.description}`.toLocaleLowerCase("pt-BR").includes(normalizedQuery);
     return product.active && matchesCategory && matchesQuery;
   }), [catalog, category, query]);
+  const heroProducts = useMemo(() => [...(catalog?.products ?? [])]
+    .filter((product) => product.active && !product.soldOut)
+    .sort((a, b) => Number(b.featured) - Number(a.featured) || a.sortOrder - b.sortOrder)
+    .slice(0, 6), [catalog]);
   const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
   const total = cart.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
+
+  useEffect(() => {
+    if (heroProducts.length < 2) return;
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reducedMotion) return;
+    const timer = window.setInterval(() => setHeroIndex((current) => (current + 1) % heroProducts.length), 4500);
+    return () => window.clearInterval(timer);
+  }, [heroProducts.length]);
 
   function openProduct(product: Product) {
     const options = parseProductOptions(product.optionsJson);
@@ -164,6 +177,12 @@ export default function Storefront() {
   const productOptions = selectedProduct ? parseProductOptions(selectedProduct.optionsJson) : [];
   const productIsCombo = productOptions.some((option) => isComboOption(option) || option.kind === "addon" || option.values.some((value) => typeof value === "object"));
   const selectedExtras = productOptions.reduce((sum, option, optionIndex) => sum + option.values.reduce((choiceSum, value) => choiceSum + ((selectedOptions[optionIndex] ?? []).includes(choiceDetails(value, 0).name) ? choicePriceDelta(value) : 0), 0), 0);
+  const safeHeroIndex = heroProducts.length ? heroIndex % heroProducts.length : 0;
+  const heroProduct = heroProducts[safeHeroIndex] ?? null;
+  const changeHeroProduct = (direction: number) => {
+    if (heroProducts.length < 2) return;
+    setHeroIndex((current) => (current + direction + heroProducts.length) % heroProducts.length);
+  };
   return (
     <div className="min-h-screen bg-[#fbf7f0] text-[#3c2419]">
       <Toaster position="top-center" richColors />
@@ -197,7 +216,16 @@ export default function Storefront() {
             </div>
             <div className="relative mx-auto w-full max-w-[500px] lg:justify-self-end">
               <div className="absolute -left-5 top-10 z-10 hidden items-center gap-2 rounded-full border border-white/70 bg-[#fffaf4]/90 px-4 py-2 text-sm font-semibold text-[#63351e] shadow-xl backdrop-blur sm:flex"><Sparkles className="size-4 text-[#a16e48]" /> Feito artesanalmente</div>
-              <div className="relative aspect-[.94] overflow-hidden rounded-[2.75rem] border-[10px] border-white/65 shadow-[0_28px_70px_rgba(80,40,18,.22)]"><ProductImage src="sprite:0" alt="Fatia de bolo de chocolate artesanal" className="absolute inset-0 h-full w-full transition duration-700 hover:scale-[1.025]" /><div className="absolute inset-x-4 bottom-4 rounded-[1.4rem] border border-white/60 bg-[#fffaf4]/92 p-4 shadow-lg backdrop-blur"><p className="text-xs font-semibold uppercase tracking-[.18em] text-[#9b6f4f]">Doce é Ser</p><p className="mt-1 font-serif text-xl leading-tight">Chocolate, afeto e bons ingredientes.</p></div></div>
+              <div className="relative aspect-[.94] overflow-hidden rounded-[2.75rem] border-[10px] border-white/65 shadow-[0_28px_70px_rgba(80,40,18,.22)]">
+                <button type="button" onClick={() => heroProduct && openProduct(heroProduct)} aria-label={heroProduct ? `Ver ${heroProduct.name}` : "Ver cardápio"} className="absolute inset-0 w-full text-left">
+                  <ProductImage key={heroProduct?.id ?? "hero-fallback"} src={heroProduct?.imageUrl ?? "sprite:0"} alt={heroProduct?.name ?? "Doce artesanal Doce é Ser"} className="hero-product-enter absolute inset-0 h-full w-full transition duration-700 hover:scale-[1.025]" />
+                </button>
+                {heroProducts.length > 1 && <><button type="button" onClick={() => changeHeroProduct(-1)} aria-label="Produto anterior" className="absolute left-3 top-1/2 z-10 grid size-10 -translate-y-1/2 place-items-center rounded-full border border-white/70 bg-[#fffaf4]/88 text-[#5b2c16] shadow-lg backdrop-blur transition hover:scale-105 hover:bg-white"><ArrowLeft className="size-4" /></button><button type="button" onClick={() => changeHeroProduct(1)} aria-label="Próximo produto" className="absolute right-3 top-1/2 z-10 grid size-10 -translate-y-1/2 place-items-center rounded-full border border-white/70 bg-[#fffaf4]/88 text-[#5b2c16] shadow-lg backdrop-blur transition hover:scale-105 hover:bg-white"><ArrowRight className="size-4" /></button></>}
+                <div className="absolute inset-x-4 bottom-4 rounded-[1.4rem] border border-white/60 bg-[#fffaf4]/94 p-4 shadow-lg backdrop-blur">
+                  <div className="flex items-end justify-between gap-3"><button type="button" onClick={() => heroProduct && openProduct(heroProduct)} className="min-w-0 text-left"><p className="text-xs font-semibold uppercase tracking-[.18em] text-[#9b6f4f]">Destaque do cardápio</p><p className="mt-1 truncate font-serif text-xl leading-tight">{heroProduct?.name ?? "Chocolate, afeto e bons ingredientes."}</p>{heroProduct && <p className="mt-1 text-sm font-bold text-[#7d4328]">{money(heroProduct.price)}</p>}</button>{heroProduct && <button type="button" onClick={() => openProduct(heroProduct)} className="grid size-10 shrink-0 place-items-center rounded-full bg-[#5b2c16] text-white shadow-md transition hover:scale-105" aria-label={`Escolher ${heroProduct.name}`}><ChevronRight className="size-5" /></button>}</div>
+                  {heroProducts.length > 1 && <div className="mt-3 flex gap-1.5" aria-label="Produtos em destaque">{heroProducts.map((product, index) => <button type="button" key={product.id} onClick={() => setHeroIndex(index)} aria-label={`Mostrar ${product.name}`} aria-current={index === safeHeroIndex ? "true" : undefined} className={`h-1.5 rounded-full transition-all ${index === safeHeroIndex ? "w-7 bg-[#6b351b]" : "w-2 bg-[#bda796] hover:bg-[#8b674e]"}`} />)}</div>}
+                </div>
+              </div>
               <div className="absolute -bottom-4 right-5 flex items-center gap-3 rounded-2xl border border-white/70 bg-[#fffaf4]/95 px-4 py-3 text-sm shadow-xl backdrop-blur"><span className="grid size-9 place-items-center rounded-full bg-[#e7efe2] text-[#477444]"><Store className="size-4" /></span><span><strong className="block text-[#4e2715]">Somente retirada</strong><small className="text-[#806b5d]">Você escolhe a data</small></span></div>
             </div>
           </div>
