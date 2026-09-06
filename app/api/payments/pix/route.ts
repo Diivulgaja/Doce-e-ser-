@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MercadoPagoError } from "mercadopago";
 import { createMercadoPagoPix, getMercadoPagoOrder, isPixPaymentConfigured, readMercadoPagoPix } from "@/lib/mercado-pago";
 import { getSupabaseAdmin, getSupabaseUser, toOrder } from "@/lib/supabase";
 
@@ -16,6 +17,35 @@ const checkoutSchema = z.object({
     notes: z.string().max(300).default(""),
   })).min(1).max(40),
 });
+
+function mercadoPagoMessage(error: MercadoPagoError) {
+  const causeCodes = error.causes.flatMap((cause) => {
+    if (!cause || typeof cause !== "object") return [];
+    const value = "code" in cause ? cause.code : "";
+    return typeof value === "string" ? [value] : [];
+  });
+  const codes = [error.error, ...causeCodes].filter(Boolean);
+  const normalized = codes.join(" ").toLowerCase();
+
+  if (normalized.includes("invalid_email_for_sandbox")) {
+    return "O Mercado Pago está usando credenciais de teste. Configure o Access Token de produção na Vercel.";
+  }
+  if (error.status === 401 || normalized.includes("invalid_credentials")) {
+    return "O Access Token do Mercado Pago está inválido. Copie o Access Token de produção e faça um novo deploy.";
+  }
+  if (error.status === 403) {
+    return "A aplicação do Mercado Pago não tem permissão para criar PIX pela API de Orders. Revise as credenciais de produção da aplicação.";
+  }
+  if (error.status === 429) {
+    return "O Mercado Pago recebeu muitas tentativas. Aguarde alguns minutos e tente novamente.";
+  }
+  if (error.status >= 500 || error.status === 0) {
+    return "O Mercado Pago está temporariamente indisponível. Tente novamente em alguns minutos.";
+  }
+  return codes[0]
+    ? `O Mercado Pago recusou a cobrança PIX (código: ${codes[0]}).`
+    : `O Mercado Pago recusou a cobrança PIX (HTTP ${error.status || 400}).`;
+}
 
 export async function POST(request: Request) {
   if (!isPixPaymentConfigured()) {
@@ -58,15 +88,23 @@ export async function POST(request: Request) {
     const pendingOrder = data as Record<string, unknown>;
     const reference = String(pendingOrder.payment_reference);
     const providerOrderId = String(pendingOrder.payment_provider_order_id ?? "");
-    const providerOrder = providerOrderId
-      ? await getMercadoPagoOrder(providerOrderId)
-      : await createMercadoPagoPix({
-          reference,
-          idempotencyKey: payload.requestId,
-          amount: Number(pendingOrder.total),
-          email: payerEmail,
-          customerName: payload.customerName,
-        });
+    let providerOrder;
+    try {
+      providerOrder = providerOrderId
+        ? await getMercadoPagoOrder(providerOrderId)
+        : await createMercadoPagoPix({
+            reference,
+            idempotencyKey: payload.requestId,
+            amount: Number(pendingOrder.total),
+            email: payerEmail,
+            customerName: payload.customerName,
+          });
+    } catch (error) {
+      await admin.from("orders").update({ payment_status: "failed" })
+        .eq("payment_reference", reference)
+        .eq("payment_status", "pending");
+      throw error;
+    }
     const pix = readMercadoPagoPix(providerOrder);
 
     if (!pix.providerOrderId || !pix.providerPaymentId || !pix.qrCode) {
@@ -101,6 +139,9 @@ export async function POST(request: Request) {
   } catch (error) {
     if (error instanceof z.ZodError) return Response.json({ error: "Revise os dados do pedido." }, { status: 400 });
     console.error("Falha ao criar cobrança PIX:", error);
+    if (error instanceof MercadoPagoError) {
+      return Response.json({ error: mercadoPagoMessage(error) }, { status: error.status >= 500 ? 502 : 400 });
+    }
     return Response.json({ error: error instanceof Error ? error.message : "Não foi possível gerar o PIX." }, { status: 400 });
   }
 }
