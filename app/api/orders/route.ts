@@ -1,4 +1,4 @@
-import { getSupabasePublic, getSupabaseUser, toOrder } from "@/lib/supabase";
+import { getSupabaseAdmin, getSupabaseUser, toOrder } from "@/lib/supabase";
 
 export async function GET(request: Request) {
   try {
@@ -16,10 +16,12 @@ export async function GET(request: Request) {
       return Response.json({ orders: (data ?? []).map((order) => toOrder(order as Record<string, unknown>)) });
     }
     if (!number || !phone) return Response.json({ error: "Informe telefone e número do pedido." }, { status: 400 });
-    const supabase = getSupabasePublic();
-    const { data, error } = await supabase.rpc("get_pickup_order", { p_order_number: number, p_phone: phone });
+    const normalizedPhone = phone.replace(/\D/g, "");
+    if (number.length < 3 || number.length > 40 || normalizedPhone.length < 8 || normalizedPhone.length > 15) return Response.json({ error: "Pedido não encontrado." }, { status: 404 });
+    const supabase = getSupabaseAdmin();
+    const { data, error } = await supabase.from("orders").select("*,order_items(*)").eq("order_number", number).eq("phone", normalizedPhone).in("payment_status", ["legacy", "paid", "refunded"]).maybeSingle();
     if (error) throw error;
-    return data ? Response.json({ order: toOrder(data) }) : Response.json({ error: "Pedido não encontrado." }, { status: 404 });
+    return data ? Response.json({ order: toOrder(data as Record<string, unknown>) }) : Response.json({ error: "Pedido não encontrado." }, { status: 404 });
   } catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Não foi possível consultar." }, { status: 500 }); }
 }
 

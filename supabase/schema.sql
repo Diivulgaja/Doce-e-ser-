@@ -497,7 +497,6 @@ returns jsonb language sql stable security definer set search_path = '' as $$
   group by o.id;
 $$;
 revoke all on function public.get_pickup_order(text,text) from public, anon, authenticated;
-grant execute on function public.get_pickup_order(text,text) to anon, authenticated, service_role;
 
 alter table public.admins enable row level security;
 alter table public.categories enable row level security;
@@ -573,7 +572,7 @@ grant select, update on public.customer_profiles to authenticated;
 grant usage, select on sequence public.categories_id_seq, public.products_id_seq to authenticated;
 
 drop policy if exists "admins read own row" on public.admins;
-create policy "admins read own row" on public.admins for select to authenticated using (user_id = auth.uid());
+create policy "admins read own row" on public.admins for select to authenticated using (user_id = (select auth.uid()));
 drop policy if exists "admins read orders" on public.orders;
 drop policy if exists "customers read own orders" on public.orders;
 drop policy if exists "authorized read orders" on public.orders;
@@ -591,11 +590,14 @@ drop policy if exists "customers update own profile" on public.customer_profiles
 create policy "customers update own profile" on public.customer_profiles for update to authenticated using ((select auth.uid()) = user_id) with check ((select auth.uid()) = user_id);
 
 drop policy if exists "public read categories" on public.categories;
-create policy "public read categories" on public.categories for select to anon, authenticated using (active = true);
+create policy "public read categories" on public.categories for select to anon using (active = true);
+drop policy if exists "authenticated read categories" on public.categories;
+create policy "authenticated read categories" on public.categories for select to authenticated using (active = true or (select private.is_admin()));
 drop policy if exists "public read products" on public.products;
-create policy "public read products" on public.products for select to anon, authenticated using (active = true);
+create policy "public read products" on public.products for select to anon using (active = true);
 drop policy if exists "admins read all products" on public.products;
-create policy "admins read all products" on public.products for select to authenticated using ((select private.is_admin()));
+drop policy if exists "authenticated read products" on public.products;
+create policy "authenticated read products" on public.products for select to authenticated using (active = true or (select private.is_admin()));
 drop policy if exists "public read settings" on public.store_settings;
 create policy "public read settings" on public.store_settings for select to anon, authenticated using (true);
 
