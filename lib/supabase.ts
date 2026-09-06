@@ -1,4 +1,6 @@
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+
+let browserClient: SupabaseClient | null | undefined;
 
 function env(name: string) {
   const value = process.env[name];
@@ -29,14 +31,20 @@ function supabaseUrl() {
   return normalizeSupabaseUrl(env("NEXT_PUBLIC_SUPABASE_URL"));
 }
 
+function supabasePublicKey() {
+  const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!key) throw new Error("Chave pública do Supabase não configurada.");
+  return key;
+}
+
 export function getSupabasePublic() {
-  return createClient(supabaseUrl(), env("NEXT_PUBLIC_SUPABASE_ANON_KEY"), {
+  return createClient(supabaseUrl(), supabasePublicKey(), {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 }
 
 export function getSupabaseUser(token: string) {
-  return createClient(supabaseUrl(), env("NEXT_PUBLIC_SUPABASE_ANON_KEY"), {
+  return createClient(supabaseUrl(), supabasePublicKey(), {
     auth: { autoRefreshToken: false, persistSession: false },
     global: { headers: { Authorization: `Bearer ${token}` } },
   });
@@ -51,10 +59,15 @@ export function getSupabaseAdmin() {
 }
 
 export function getSupabaseBrowser() {
+  if (browserClient !== undefined) return browserClient;
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!url || !key) return null;
-  return createClient(normalizeSupabaseUrl(url), key);
+  const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !key) {
+    browserClient = null;
+    return browserClient;
+  }
+  browserClient = createClient(normalizeSupabaseUrl(url), key);
+  return browserClient;
 }
 
 export async function requireAdmin(request: Request) {
