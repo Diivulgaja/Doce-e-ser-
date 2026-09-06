@@ -42,12 +42,19 @@ export async function POST(request: Request) {
       if (expected !== charged || received < expected) throw new Error("Valor confirmado pelo Mercado Pago não corresponde ao pedido.");
     }
 
+    const currentPaymentStatus = String(result.data.payment_status);
+    if (currentPaymentStatus === "refunded" && paymentStatus !== "refunded") return Response.json({ ok: true });
+    if (currentPaymentStatus === "paid" && ["pending", "expired", "failed"].includes(paymentStatus)) return Response.json({ ok: true });
+
     const update: Record<string, unknown> = {
       payment_status: paymentStatus,
       payment_provider_order_id: pix.providerOrderId,
       payment_provider_payment_id: pix.providerPaymentId,
     };
-    if (paymentStatus === "paid") update.paid_at = new Date().toISOString();
+    if (paymentStatus === "paid") {
+      update.paid_at = new Date().toISOString();
+      if (result.data.status === "cancelled" && ["pending", "expired", "failed"].includes(currentPaymentStatus)) update.status = "received";
+    }
     if (["expired", "failed"].includes(paymentStatus)) update.status = "cancelled";
     if (paymentStatus === "refunded" && result.data.status !== "picked_up") update.status = "cancelled";
 
