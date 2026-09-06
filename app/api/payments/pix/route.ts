@@ -97,7 +97,6 @@ export async function POST(request: Request) {
             idempotencyKey: payload.requestId,
             amount: Number(pendingOrder.total),
             email: payerEmail,
-            customerName: payload.customerName,
           });
     } catch (error) {
       await admin.from("orders").update({ payment_status: "failed" })
