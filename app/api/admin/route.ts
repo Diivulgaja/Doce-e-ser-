@@ -59,7 +59,7 @@ async function getAdminData(supabase: SupabaseClient) {
 export async function GET(request: Request) {
   const user = await requireAdmin(request);
   if (!user) return Response.json({ error: "Acesso restrito. Confirme o e-mail administrador." }, { status: 403 });
-  try { return Response.json({ ...(await getAdminData(user.supabase)), user: { displayName: user.user.user_metadata?.full_name ?? user.user.email, email: user.user.email } }); }
+  try { return Response.json({ ...(await getAdminData(user.supabase)), user: { displayName: user.user.user_metadata?.full_name ?? user.user.email, email: user.user.email } }, { headers: { "Cache-Control": "private, no-store" } }); }
   catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Não foi possível carregar." }, { status: 500 }); }
 }
 
