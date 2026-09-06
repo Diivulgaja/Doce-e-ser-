@@ -13,7 +13,7 @@ export async function GET(request: Request) {
       if (authError || !user) return Response.json({ error: "Entre novamente para ver seus pedidos." }, { status: 401 });
       const { data, error } = await supabase.from("orders").select("*, order_items(*)").in("payment_status", ["legacy", "paid", "refunded"]).order("created_at", { ascending: false }).limit(50);
       if (error) throw error;
-      return Response.json({ orders: (data ?? []).map((order) => toOrder(order as Record<string, unknown>)) });
+      return Response.json({ orders: (data ?? []).map((order) => toOrder(order as Record<string, unknown>)) }, { headers: { "Cache-Control": "private, no-store" } });
     }
     if (!number || !phone) return Response.json({ error: "Informe telefone e número do pedido." }, { status: 400 });
     const normalizedPhone = phone.replace(/\D/g, "");
@@ -21,8 +21,11 @@ export async function GET(request: Request) {
     const supabase = getSupabaseAdmin();
     const { data, error } = await supabase.from("orders").select("*,order_items(*)").eq("order_number", number).eq("phone", normalizedPhone).in("payment_status", ["legacy", "paid", "refunded"]).maybeSingle();
     if (error) throw error;
-    return data ? Response.json({ order: toOrder(data as Record<string, unknown>) }) : Response.json({ error: "Pedido não encontrado." }, { status: 404 });
-  } catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Não foi possível consultar." }, { status: 500 }); }
+    return data ? Response.json({ order: toOrder(data as Record<string, unknown>) }, { headers: { "Cache-Control": "private, no-store" } }) : Response.json({ error: "Pedido não encontrado." }, { status: 404, headers: { "Cache-Control": "no-store" } });
+  } catch (error) {
+    console.error("Falha interna ao consultar pedidos:", error);
+    return Response.json({ error: "Não foi possível consultar os pedidos agora." }, { status: 500, headers: { "Cache-Control": "no-store" } });
+  }
 }
 
 export async function POST() {

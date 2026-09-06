@@ -47,6 +47,19 @@ function mercadoPagoMessage(error: MercadoPagoError) {
     : `O Mercado Pago recusou a cobrança PIX (HTTP ${error.status || 400}).`;
 }
 
+function checkoutMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : "";
+  const allowed = [
+    "Revise os dados do pedido.", "Revise os itens do pedido.", "A loja ainda não está configurada.",
+    "Escolha uma data de retirada válida.", "A loja não atende nesta data.",
+    "O prazo de preparo de hoje já encerrou. Escolha outra data.",
+    "Aguarde alguns minutos antes de gerar outro pagamento.",
+    "Esta data atingiu o limite de encomendas. Escolha outro dia.",
+    "Um item do carrinho não está mais disponível.", "Escolha corretamente todas as opções do produto.",
+  ];
+  return allowed.find((item) => message.includes(item)) ?? "Não foi possível gerar o PIX agora. Tente novamente em alguns instantes.";
+}
+
 export async function POST(request: Request) {
   if (!isPixPaymentConfigured()) {
     return Response.json({ error: "O pagamento PIX ainda está sendo configurado." }, { status: 503 });
@@ -141,6 +154,7 @@ export async function POST(request: Request) {
     if (error instanceof MercadoPagoError) {
       return Response.json({ error: mercadoPagoMessage(error) }, { status: error.status >= 500 ? 502 : 400 });
     }
-    return Response.json({ error: error instanceof Error ? error.message : "Não foi possível gerar o PIX." }, { status: 400 });
+    console.error("Erro interno ao preparar checkout PIX:", error);
+    return Response.json({ error: checkoutMessage(error) }, { status: 400 });
   }
 }

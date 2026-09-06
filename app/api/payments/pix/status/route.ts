@@ -31,6 +31,7 @@ export async function GET(request: Request) {
     return Response.json({ checkout }, { headers: { "Cache-Control": "no-store, max-age=0" } });
   } catch (error) {
     if (error instanceof z.ZodError) return Response.json({ error: "Cobrança inválida." }, { status: 400 });
-    return Response.json({ error: error instanceof Error ? error.message : "Não foi possível consultar o pagamento." }, { status: 500 });
+    console.error("Falha interna ao consultar pagamento PIX:", error);
+    return Response.json({ error: "Não foi possível consultar o pagamento agora." }, { status: 500, headers: { "Cache-Control": "no-store" } });
   }
 }

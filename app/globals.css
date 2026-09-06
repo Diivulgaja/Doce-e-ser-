@@ -2,6 +2,19 @@
 @import "tw-animate-css";
 @import "../vendor/shadcn-tailwind-4.13.0.css";
 
+@keyframes hero-product-enter {
+  from { opacity: 0; transform: scale(1.035); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.hero-product-enter {
+  animation: hero-product-enter 700ms cubic-bezier(.22, 1, .36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-product-enter { animation: none; }
+}
+
 @utility scrollbar-thin {
   scrollbar-width: thin;
 }

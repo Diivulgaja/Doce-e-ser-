@@ -3,7 +3,7 @@
 import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { BellRing, CheckCircle2, ChevronRight, ClipboardList, Clock3, Download, ImagePlus, Layers3, LayoutDashboard, LogOut, Menu, PackageOpen, Pencil, Plus, Settings, ShoppingBag, Store, Trash2, Upload, Volume2, VolumeX, X } from "lucide-react";
+import { BellRing, CheckCircle2, ChevronRight, ClipboardList, Clock3, Download, ImagePlus, Layers3, LayoutDashboard, LogOut, Menu, PackageOpen, Pencil, Plus, Settings, ShoppingBag, Store, Trash2, Upload, Volume2, VolumeX } from "lucide-react";
 import { toast } from "sonner";
 import ProductImage from "@/components/product-image";
 import { Button } from "@/components/ui/button";
@@ -62,18 +62,28 @@ export default function AdminDashboard() {
     };
   }, []);
 
-  const beep = useCallback(() => {
-    if (!soundOn) return;
+  const playAlarm = useCallback(() => {
     const AudioCtor = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     if (!AudioCtor) return;
     const context = new AudioCtor();
-    const oscillator = context.createOscillator();
-    const gain = context.createGain();
-    oscillator.frequency.setValueAtTime(880, context.currentTime);
-    gain.gain.setValueAtTime(volume * .18, context.currentTime);
-    oscillator.connect(gain); gain.connect(context.destination); oscillator.start(); oscillator.stop(context.currentTime + .22);
-    oscillator.onended = () => context.close();
-  }, [soundOn, volume]);
+    const master = context.createGain();
+    master.gain.setValueAtTime(Math.max(.01, volume * .42), context.currentTime);
+    master.connect(context.destination);
+    const notes = [{ frequency: 784, start: 0, duration: .34 }, { frequency: 988, start: .42, duration: .36 }, { frequency: 1175, start: .88, duration: .62 }];
+    notes.forEach(({ frequency, start, duration }) => {
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.type = "sine";
+      oscillator.frequency.setValueAtTime(frequency, context.currentTime + start);
+      gain.gain.setValueAtTime(.001, context.currentTime + start);
+      gain.gain.exponentialRampToValueAtTime(1, context.currentTime + start + .035);
+      gain.gain.exponentialRampToValueAtTime(.001, context.currentTime + start + duration);
+      oscillator.connect(gain); gain.connect(master);
+      oscillator.start(context.currentTime + start);
+      oscillator.stop(context.currentTime + start + duration);
+    });
+    window.setTimeout(() => void context.close(), 1800);
+  }, [volume]);
 
   const load = useCallback(async (poll = false) => {
     if (!session?.access_token) return;
@@ -82,7 +92,8 @@ export default function AdminDashboard() {
       const next = await response.json();
       if (!response.ok) throw new Error(next.error);
       const newest = next.orders?.[0] as Order | undefined;
-      if (poll && newest && knownOrderRef.current && newest.id > knownOrderRef.current && newest.status === "received") setAlertOrder(newest);
+      const waiting = next.orders?.find((order: Order) => order.status === "received") as Order | undefined;
+      if (waiting && (!poll || !knownOrderRef.current || waiting.id > knownOrderRef.current)) setAlertOrder(waiting);
       if (newest) knownOrderRef.current = Math.max(knownOrderRef.current ?? 0, newest.id);
       setData(next);
     } catch (error) { if (!poll) toast.error(error instanceof Error ? error.message : "Não foi possível carregar o painel."); }
@@ -92,13 +103,13 @@ export default function AdminDashboard() {
     if (!session) return;
     void Promise.resolve().then(() => load());
     const timer = setInterval(() => load(true), 15000);
-    const channel = supabase?.channel("admin-orders").on("postgres_changes", { event: "INSERT", schema: "public", table: "orders" }, () => load(true)).subscribe();
+    const channel = supabase?.channel("admin-orders").on("postgres_changes", { event: "*", schema: "public", table: "orders" }, () => load(true)).subscribe();
     return () => { clearInterval(timer); if (channel) supabase?.removeChannel(channel); };
   }, [load, session, supabase]);
   useEffect(() => {
-    if (alertOrder && soundOn) { beep(); alarmRef.current = setInterval(beep, 2500); }
+    if (alertOrder && soundOn) { playAlarm(); alarmRef.current = setInterval(playAlarm, 3200); }
     return () => { if (alarmRef.current) clearInterval(alarmRef.current); alarmRef.current = null; };
-  }, [alertOrder, soundOn, beep]);
+  }, [alertOrder, soundOn, playAlarm]);
 
   async function action(payload: Record<string, unknown>, success: string) {
     const response = await fetch("/api/admin", { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${session?.access_token}` }, body: JSON.stringify(payload) });
@@ -152,15 +163,14 @@ export default function AdminDashboard() {
           <p className="mt-1 truncate text-sm font-semibold">Pedido #{alertOrder.orderNumber} · {alertOrder.customerName}</p>
           <div className="mt-2 flex flex-wrap gap-2 text-xs text-[#725844]"><span className="rounded-full bg-[#f2e4d2] px-2.5 py-1">{alertOrder.items.reduce((sum, item) => sum + item.quantity, 0)} {alertOrder.items.reduce((sum, item) => sum + item.quantity, 0) === 1 ? "item" : "itens"}</span><span className="rounded-full bg-[#edf5eb] px-2.5 py-1 font-bold text-[#356333]">{money(alertOrder.total)} · PIX pago</span></div>
         </div>
-        <button onClick={() => setAlertOrder(null)} aria-label="Fechar aviso" className="rounded-full p-2 text-[#806b5d] transition hover:bg-[#efe5d9]"><X className="size-5" /></button>
       </div>
-      <div className="flex gap-2 border-t border-[#6a3d24]/10 bg-[#f9f1e8] p-3 sm:justify-end"><Button variant="outline" onClick={() => setAlertOrder(null)} className="h-10 flex-1 rounded-full border-[#8b674e]/25 bg-white sm:flex-none">Dispensar</Button><Button onClick={() => { setTab("orders"); setAlertOrder(null); }} className={`h-10 flex-1 px-6 sm:flex-none ${adminPrimaryButton}`}>Ver pedido <ChevronRight className="size-4" /></Button></div>
+      <div className="flex flex-col gap-2 border-t border-[#6a3d24]/10 bg-[#f9f1e8] p-3 sm:flex-row sm:items-center sm:justify-end"><p className="flex-1 px-1 text-xs font-medium text-[#806b5d]">O aviso e o som continuam até o pedido ser aceito.</p><Button variant="outline" onClick={() => setTab("orders")} className="h-10 rounded-full border-[#8b674e]/25 bg-white">Ver detalhes</Button><Button onClick={() => void updateOrderStatus(alertOrder, "confirmed")} className={`h-10 px-6 ${adminPrimaryButton}`}><CheckCircle2 className="size-4" /> Aceitar pedido</Button></div>
     </div>}
     <aside className={`fixed inset-y-0 left-0 z-50 w-72 border-r border-[#53311d]/10 bg-[#4b2514] p-5 text-[#fff8ef] transition-transform lg:translate-x-0 ${menuOpen ? "translate-x-0" : "-translate-x-full"}`}><div className="flex items-center gap-3"><Image src="/assets/logo-doce-e-ser.png" alt="Doce é Ser" width={54} height={54} className="rounded-2xl" /><div><p className="font-serif text-xl">Doce é Ser</p><p className="text-xs text-[#d8bdac]">Painel administrativo</p></div></div><nav className="mt-10 grid gap-2">{nav.map((item) => <button key={item.value} onClick={() => { setTab(item.value); setMenuOpen(false); }} className={`flex items-center gap-3 rounded-xl px-4 py-3 text-left text-sm font-semibold transition-all ${tab === item.value ? "bg-[#f2d29f] text-[#4b2514] shadow-lg shadow-black/10" : "text-[#ead8ca] hover:translate-x-1 hover:bg-white/8"}`}><item.icon className="size-5" />{item.label}</button>)}</nav><div className="absolute inset-x-5 bottom-5 space-y-2">{!isInstalled && <button onClick={installPanel} className="flex w-full items-center gap-3 rounded-xl bg-[#f2d29f] px-4 py-3 text-left text-sm font-semibold text-[#4b2514] shadow-lg transition hover:-translate-y-0.5 hover:bg-[#f7ddb2]"><Download className="size-5" />Instalar painel</button>}<Link href="/" className="flex items-center gap-3 rounded-xl px-4 py-3 text-sm text-[#ead8ca] transition hover:bg-white/8"><Store className="size-5" />Ver loja</Link><button onClick={() => supabase.auth.signOut()} className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm text-[#ead8ca] transition hover:bg-white/8"><LogOut className="size-5" />Sair</button></div></aside>
     {menuOpen && <button aria-label="Fechar menu" onClick={() => setMenuOpen(false)} className="fixed inset-0 z-40 bg-black/30 lg:hidden" />}
-    <main className="lg:pl-72"><header className="sticky top-0 z-30 flex h-20 items-center gap-4 border-b border-[#53311d]/10 bg-[#f7f3ed]/95 px-4 backdrop-blur sm:px-7"><button onClick={() => setMenuOpen(true)} className="rounded-full p-2 transition hover:bg-white lg:hidden"><Menu /></button><div><p className="font-serif text-2xl">{nav.find((item) => item.value === tab)?.label}</p><p className="text-xs text-[#846d5e]">Olá, {data.user.displayName.split(" ")[0]}</p></div><div className="ml-auto flex items-center gap-3"><Button variant="outline" onClick={() => { const next = !soundOn; setSoundOn(next); if (next) setTimeout(beep, 0); }} className="rounded-full bg-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">{soundOn ? <Volume2 /> : <VolumeX />}<span className="hidden sm:inline">{soundOn ? "Som ativo" : "Ativar som"}</span></Button></div></header>
+    <main className="lg:pl-72"><header className="sticky top-0 z-30 flex h-20 items-center gap-4 border-b border-[#53311d]/10 bg-[#f7f3ed]/95 px-4 backdrop-blur sm:px-7"><button onClick={() => setMenuOpen(true)} className="rounded-full p-2 transition hover:bg-white lg:hidden"><Menu /></button><div><p className="font-serif text-2xl">{nav.find((item) => item.value === tab)?.label}</p><p className="text-xs text-[#846d5e]">Olá, {data.user.displayName.split(" ")[0]}</p></div><div className="ml-auto flex items-center gap-3"><Button variant="outline" onClick={() => { const next = !soundOn; setSoundOn(next); if (next) setTimeout(playAlarm, 0); }} className="rounded-full bg-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">{soundOn ? <Volume2 /> : <VolumeX />}<span className="hidden sm:inline">{soundOn ? "Som ativo" : "Ativar som"}</span></Button></div></header>
       <div className="p-4 sm:p-7 lg:p-9">
-        {tab === "dashboard" && <section><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Metric label="Pedidos novos" value={String(data.orders.filter((order) => order.status === "received").length)} icon={BellRing} tone="red" /><Metric label="Em preparação" value={String(data.orders.filter((order) => order.status === "preparing").length)} icon={Clock3} /><Metric label="Prontos" value={String(data.orders.filter((order) => order.status === "ready").length)} icon={CheckCircle2} tone="green" /><Metric label="Vendas de hoje" value={money(revenue)} icon={ShoppingBag} /></div><div className="mt-7 grid gap-6 xl:grid-cols-[1.25fr_.75fr]"><Panel title="Pedidos recentes" action={<button onClick={() => setTab("orders")} className="text-sm font-semibold text-[#7b4a2f]">Ver todos</button>}><OrderList orders={data.orders.slice(0, 5)} onStatus={updateOrderStatus} /></Panel><Panel title="Alarme de pedidos"><div className="space-y-5"><div className="flex items-center justify-between"><div><p className="font-semibold">Som do painel</p><p className="text-sm text-[#806b5d]">Repete até visualizar o pedido.</p></div><Switch checked={soundOn} onCheckedChange={(checked) => { setSoundOn(checked); if (checked) setTimeout(beep, 0); }} /></div><label className="block"><span className="text-sm font-medium">Volume</span><input type="range" min="0" max="1" step=".05" value={volume} onChange={(event) => setVolume(Number(event.target.value))} className="mt-2 w-full accent-[#5b2c16]" /></label><Button variant="outline" onClick={beep} disabled={!soundOn} className="w-full">Testar alarme</Button><p className="rounded-xl bg-[#efe5d9] p-3 text-xs leading-5 text-[#725844]">Mantenha o painel aberto para receber atualização automática, aviso visual e som.</p></div></Panel></div></section>}
+        {tab === "dashboard" && <section><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Metric label="Pedidos novos" value={String(data.orders.filter((order) => order.status === "received").length)} icon={BellRing} tone="red" /><Metric label="Em preparação" value={String(data.orders.filter((order) => order.status === "preparing").length)} icon={Clock3} /><Metric label="Prontos" value={String(data.orders.filter((order) => order.status === "ready").length)} icon={CheckCircle2} tone="green" /><Metric label="Vendas de hoje" value={money(revenue)} icon={ShoppingBag} /></div><div className="mt-7 grid gap-6 xl:grid-cols-[1.25fr_.75fr]"><Panel title="Pedidos recentes" action={<button onClick={() => setTab("orders")} className="text-sm font-semibold text-[#7b4a2f]">Ver todos</button>}><OrderList orders={data.orders.slice(0, 5)} onStatus={updateOrderStatus} /></Panel><Panel title="Alarme de pedidos"><div className="space-y-5"><div className="flex items-center justify-between"><div><p className="font-semibold">Som do painel</p><p className="text-sm text-[#806b5d]">Repete até aceitar o pedido.</p></div><Switch checked={soundOn} onCheckedChange={(checked) => { setSoundOn(checked); if (checked) setTimeout(playAlarm, 0); }} /></div><label className="block"><span className="text-sm font-medium">Volume</span><input type="range" min="0" max="1" step=".05" value={volume} onChange={(event) => setVolume(Number(event.target.value))} className="mt-2 w-full accent-[#5b2c16]" /></label><Button variant="outline" onClick={playAlarm} disabled={!soundOn} className="w-full">Testar novo alarme</Button><p className="rounded-xl bg-[#efe5d9] p-3 text-xs leading-5 text-[#725844]">Mantenha o painel aberto e o som ativado. O alerta visual e o toque só param quando você aceita o pedido.</p></div></Panel></div></section>}
         {tab === "orders" && <Panel title="Todos os pedidos" action={<span className="text-sm text-[#806b5d]">Atualização automática</span>}><OrderList orders={data.orders} onStatus={updateOrderStatus} detailed /></Panel>}
         {tab === "menu" && <Panel title="Produtos" action={<Button onClick={() => setProductEditor({ categoryId: data.categories[0]?.id, active: true, soldOut: false, featured: false, imageUrl: "sprite:0", price: 0, optionsJson: "[]", sortOrder: data.products.length })} className={adminPrimaryButton}><Plus />Novo produto</Button>}>
           <div className="mb-4 rounded-2xl border border-[#8b674e]/15 bg-[#f3e8da] px-4 py-3 text-sm text-[#674733]">Use o botão <strong>Visível/Oculto</strong> para atualizar o cardápio sem abrir a edição do produto.</div>
