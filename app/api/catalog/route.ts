@@ -1,4 +1,5 @@
 import { getSupabasePublic, toCategory, toProduct, toSettings } from "@/lib/supabase";
+import { isPixPaymentConfigured } from "@/lib/mercado-pago";
 
 export const dynamic = "force-dynamic";
 
@@ -24,7 +25,7 @@ export async function GET() {
     const error = categoryError ?? productError ?? settingsError;
     if (error) throw error;
     return Response.json(
-      { categories: (categories ?? []).map(toCategory), products: (products ?? []).map(toProduct), settings: toSettings(settings) },
+      { categories: (categories ?? []).map(toCategory), products: (products ?? []).map(toProduct), settings: toSettings(settings), pixPaymentEnabled: isPixPaymentConfigured() },
       { headers: { "Cache-Control": "no-store, max-age=0" } },
     );
   } catch (error) {

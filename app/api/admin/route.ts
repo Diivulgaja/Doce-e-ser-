@@ -49,7 +49,7 @@ async function getAdminData(supabase: SupabaseClient) {
     supabase.from("categories").select("*").order("sort_order"),
     supabase.from("products").select("*").order("sort_order"),
     supabase.from("store_settings").select("*").eq("id", 1).single(),
-    supabase.from("orders").select("*,order_items(*)").order("created_at", { ascending: false }).limit(100),
+    supabase.from("orders").select("*,order_items(*)").in("payment_status", ["legacy", "paid", "refunded"]).order("created_at", { ascending: false }).limit(100),
   ]);
   const error = categories.error ?? products.error ?? settings.error ?? orders.error;
   if (error) throw error;
@@ -102,10 +102,10 @@ export async function POST(request: Request) {
     } else if (action === "saveSettings") {
       const settings = body.settings as Record<string, unknown>;
       const closedDays = parseJsonArray(settings.closedDaysJson, "Os dias fechados").map(Number);
-      const paymentMethods = parseJsonArray(settings.paymentMethodsJson, "As formas de pagamento").map(String).filter(Boolean);
       if (closedDays.some((day) => !Number.isInteger(day) || day < 0 || day > 6)) throw new Error("Use números de 0 a 6 nos dias fechados.");
-      if (!paymentMethods.length) throw new Error("Informe pelo menos uma forma de pagamento.");
-      const values = { store_name: String(settings.storeName), phone: String(settings.phone), whatsapp: String(settings.whatsapp), instagram: String(settings.instagram), address: String(settings.address), maps_url: String(settings.mapsUrl), open_time: String(settings.openTime), close_time: String(settings.closeTime), interval_minutes: Number(settings.intervalMinutes), orders_per_slot: Number(settings.ordersPerSlot), prep_minutes: Number(settings.prepMinutes), closed_days: closedDays, payment_methods: paymentMethods, updated_at: new Date().toISOString() };
+      const ordersPerDay = Number(settings.ordersPerDay);
+      if (!Number.isInteger(ordersPerDay) || ordersPerDay < 1 || ordersPerDay > 500) throw new Error("O limite diário deve ficar entre 1 e 500 pedidos.");
+      const values = { store_name: String(settings.storeName), phone: String(settings.phone), whatsapp: String(settings.whatsapp), instagram: String(settings.instagram), address: String(settings.address), maps_url: String(settings.mapsUrl), open_time: String(settings.openTime), close_time: String(settings.closeTime), interval_minutes: Number(settings.intervalMinutes), orders_per_slot: Number(settings.ordersPerSlot), orders_per_day: ordersPerDay, prep_minutes: Number(settings.prepMinutes), closed_days: closedDays, payment_methods: ["PIX"], updated_at: new Date().toISOString() };
       const { error } = await supabase.from("store_settings").update(values).eq("id", 1).select("id").single(); if (error) throw error;
     } else return Response.json({ error: "Ação inválida." }, { status: 400 });
     return Response.json({ ok: true });

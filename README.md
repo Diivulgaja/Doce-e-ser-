@@ -1,47 +1,69 @@
-# Doce é Ser — código completo com Supabase
+# Doce é Ser — código completo com Supabase e PIX
 
-Loja virtual para doces e bolos com pedidos exclusivamente para retirada. Esta versão usa Next.js e Supabase e pode ser executada no computador ou publicada em serviços compatíveis com Next.js.
+Loja virtual para doces e bolos com pedidos exclusivamente para retirada. O cliente escolhe a data, paga por PIX e o pedido só aparece para a proprietária depois da confirmação automática do Mercado Pago.
 
 ## O que você controla
 
 - código-fonte completo;
-- banco PostgreSQL no seu Supabase;
-- usuários e senhas do painel pelo Supabase Auth;
-- fotos dos produtos pelo Supabase Storage;
-- produtos, categorias, pedidos, clientes e configurações;
-- regras de horários, capacidade por faixa de retirada e tempo de preparo.
+- banco PostgreSQL, autenticação e fotos no seu Supabase;
+- produtos, categorias, combos, adicionais, pedidos, clientes e configurações;
+- capacidade diária e antecedência mínima para encomendas;
+- painel instalável da proprietária com atualização em tempo real e alarme;
+- conta do cliente com histórico e códigos curtos de seis dígitos.
 
-## 1. Criar o Supabase
+## 1. Preparar o Supabase
 
-1. Crie uma conta em https://supabase.com e um novo projeto.
-2. Em **Authentication > Users**, crie primeiro o e-mail e a senha da proprietária.
-3. No projeto, abra **SQL Editor**.
-4. Abra o arquivo `supabase/schema.sql` deste projeto, copie todo o conteúdo e execute no SQL Editor.
-5. O script cria as tabelas, regras de segurança, cardápio inicial, função transacional de pedidos, atualização em tempo real e o armazenamento `product-images`.
+1. Em **Authentication > Users**, crie o e-mail e a senha da proprietária.
+2. Abra **SQL Editor** no projeto Supabase.
+3. Copie e execute todo o arquivo `supabase/schema.sql`.
+4. O script cria ou atualiza tabelas, índices, políticas RLS, funções transacionais, Realtime e o bucket `product-images`.
 
-## 2. Criar o administrador
+O primeiro usuário existente quando o script é executado é registrado como proprietária. Contas adicionais precisam ser incluídas na tabela `admins`.
 
-1. O primeiro e único usuário existente quando o script é executado é registrado como proprietária automaticamente.
-2. Para contas adicionais, inclua o `user_id` e o e-mail manualmente na tabela `admins`.
-3. Apenas contas presentes na tabela `admins` conseguem ler ou alterar os dados privados do painel.
+## 2. Variáveis do Supabase
 
-## 3. Configurar as chaves
-
-No Supabase, abra **Project Settings > API** e copie:
-
-- Project URL;
-- chave pública `anon`/`publishable`.
-
-Duplique `.env.example`, renomeie a cópia para `.env.local` e preencha:
+Em **Project Settings > API**, copie a URL, a chave pública e uma chave secreta. No Vercel, cadastre:
 
 ```env
 NEXT_PUBLIC_SUPABASE_URL=https://SEU-PROJETO.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=sua-chave-publica
+SUPABASE_SECRET_KEY=sua-chave-secreta
 ```
 
-O site não precisa da chave `service_role`: as permissões são controladas pelo login e pelas políticas RLS do Supabase. O arquivo `.env.local` já está ignorado pelo Git.
+`SUPABASE_SECRET_KEY` é usada apenas nas rotas do servidor para criar cobranças pendentes com segurança. Nunca use essa chave em uma variável `NEXT_PUBLIC_*` nem no navegador. Projetos que ainda usam a chave legada podem configurar `SUPABASE_SERVICE_ROLE_KEY` como alternativa.
 
-## 4. Executar no computador
+## 3. Deixar o PIX preparado, mas desligado
+
+Enquanto o acesso ao Mercado Pago não estiver disponível, mantenha:
+
+```env
+NEXT_PUBLIC_SITE_URL=https://doceeser.vercel.app
+PIX_PAYMENT_ENABLED=false
+```
+
+Nesse estado, o cardápio e o painel continuam disponíveis, mas o botão de pagamento informa que o PIX está em configuração. Nenhum pedido sem pagamento é enviado para a proprietária.
+
+## 4. Conectar o Mercado Pago por último
+
+Quando recuperar a conta:
+
+1. Acesse **Mercado Pago Developers > Suas integrações** e crie ou abra a aplicação da loja.
+2. Copie o **Access Token de produção**.
+3. Cadastre uma notificação do tipo **Order** apontando para `https://doceeser.vercel.app/api/payments/mercado-pago/webhook`.
+4. Copie a assinatura secreta do webhook.
+5. No Vercel, adicione:
+
+```env
+MERCADO_PAGO_ACCESS_TOKEN=APP_USR-seu-token
+MERCADO_PAGO_WEBHOOK_SECRET=seu-segredo-do-webhook
+PIX_PAYMENT_ENABLED=true
+```
+
+6. Faça um novo deploy e teste primeiro com uma compra de valor baixo.
+
+O fluxo usa idempotência, cobrança PIX com validade de 30 minutos, validação da assinatura do webhook e conferência do valor no servidor. Uma cobrança pendente não aparece no painel, no alarme nem no histórico; somente pagamentos aprovados são liberados para produção.
+
+## 5. Executar no computador
 
 Requer Node.js 20 ou superior.
 
@@ -50,33 +72,29 @@ npm install
 npm run dev
 ```
 
-Abra `http://localhost:3000`. O painel fica em `http://localhost:3000/admin`.
+Loja: `http://localhost:3000`  
+Painel: `http://localhost:3000/admin`
 
-## 5. Toques finais no painel
+## Toques finais no painel
 
-Depois de entrar em `/admin`:
-
-1. ajuste endereço, WhatsApp, Instagram e telefone;
-2. configure abertura, fechamento, intervalo, limite e tempo de preparo;
-3. revise preços, descrições e categorias;
-4. envie as fotos reais pela galeria do celular ou computador;
-5. ative o som e use **Testar alarme**.
-6. use **Instalar painel** dentro da área autenticada para adicioná-lo à tela inicial do celular da proprietária.
+1. Ajuste endereço, WhatsApp, Instagram e telefone.
+2. Configure abertura, fechamento, antecedência e limite diário.
+3. Revise preços, descrições, categorias, combos e adicionais.
+4. Envie as fotos reais pela galeria do celular ou computador.
+5. Ative o som e use **Testar alarme**.
+6. Use **Instalar painel** dentro da área autenticada no celular da proprietária.
 
 ## Banco de dados
 
 | Tabela | Finalidade |
 | --- | --- |
 | `admins` | usuários autorizados no painel |
-| `customers` | cadastro automático dos clientes por telefone |
+| `customers` | cadastro dos clientes por telefone |
+| `customer_profiles` | perfil da conta do cliente |
 | `categories` | categorias e ordem do cardápio |
-| `products` | produtos, preços, opções, fotos e estoque |
-| `orders` | pedidos, retirada, pagamento e status |
-| `order_items` | itens e adicionais de cada pedido |
-| `store_settings` | dados, horários e regras da loja |
+| `products` | produtos, preços, combos, opções, fotos e disponibilidade |
+| `orders` | pedido, data de retirada, pagamento e status |
+| `order_items` | itens, preços congelados e adicionais do pedido |
+| `store_settings` | dados, funcionamento e capacidade diária da loja |
 
-O fechamento do pedido usa a função `create_pickup_order`, que valida produtos, horário, antecedência e limite por faixa antes de gravar tudo em uma única transação.
-
-## Publicação futura
-
-O projeto está pronto para uma hospedagem compatível com Next.js. Cadastre as mesmas quatro variáveis de ambiente na hospedagem antes de publicar. O banco e as fotos continuam na sua conta Supabase.
+O checkout usa `create_pix_checkout`, que valida preços, disponibilidade, opções, data e capacidade em uma única transação. O cliente não escolhe horário exato: a doceria avisa quando a encomenda estiver pronta.

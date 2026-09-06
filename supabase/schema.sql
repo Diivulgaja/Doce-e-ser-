@@ -54,16 +54,44 @@ create table if not exists public.orders (
   customer_id bigint references public.customers(id),
   customer_name text not null,
   phone text not null,
+  customer_email text not null default '',
   pickup_date date not null,
-  pickup_time time not null,
+  pickup_time time,
   notes text not null default '',
   payment_method text not null check (char_length(trim(payment_method)) between 1 and 60),
+  payment_status text not null default 'legacy' check (payment_status in ('legacy','pending','paid','expired','failed','refunded')),
+  payment_provider text not null default 'manual',
+  payment_reference uuid not null default gen_random_uuid(),
+  payment_idempotency_key uuid,
+  payment_provider_order_id text,
+  payment_provider_payment_id text,
+  payment_ticket_url text,
+  payment_qr_code text,
+  payment_expires_at timestamptz,
+  paid_at timestamptz,
   status text not null default 'received' check (status in ('received','confirmed','preparing','ready','picked_up','cancelled')),
   total numeric(10,2) not null check (total >= 0),
   created_at timestamptz not null default now()
 );
 
 alter table public.orders add column if not exists user_id uuid references auth.users(id) on delete set null;
+alter table public.orders add column if not exists customer_email text not null default '';
+alter table public.orders alter column pickup_time drop not null;
+alter table public.orders add column if not exists payment_status text not null default 'legacy';
+alter table public.orders add column if not exists payment_provider text not null default 'manual';
+alter table public.orders add column if not exists payment_reference uuid not null default gen_random_uuid();
+alter table public.orders add column if not exists payment_idempotency_key uuid;
+alter table public.orders add column if not exists payment_provider_order_id text;
+alter table public.orders add column if not exists payment_provider_payment_id text;
+alter table public.orders add column if not exists payment_ticket_url text;
+alter table public.orders add column if not exists payment_qr_code text;
+alter table public.orders add column if not exists payment_expires_at timestamptz;
+alter table public.orders add column if not exists paid_at timestamptz;
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'orders_payment_status_check' and conrelid = 'public.orders'::regclass) then
+    alter table public.orders add constraint orders_payment_status_check check (payment_status in ('legacy','pending','paid','expired','failed','refunded'));
+  end if;
+end $$;
 create sequence if not exists public.order_number_seq as bigint start with 100001;
 
 create table if not exists public.order_items (
@@ -89,11 +117,19 @@ create table if not exists public.store_settings (
   close_time time not null default '18:00',
   interval_minutes integer not null default 30 check (interval_minutes between 10 and 180),
   orders_per_slot integer not null default 6 check (orders_per_slot between 1 and 100),
+  orders_per_day integer not null default 50 check (orders_per_day between 1 and 500),
   closed_days smallint[] not null default '{0}',
   prep_minutes integer not null default 120 check (prep_minutes between 0 and 10080),
-  payment_methods text[] not null default array['PIX','Cartão','Dinheiro'],
+  payment_methods text[] not null default array['PIX'],
   updated_at timestamptz not null default now()
 );
+
+alter table public.store_settings add column if not exists orders_per_day integer not null default 50;
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'store_settings_orders_per_day_check' and conrelid = 'public.store_settings'::regclass) then
+    alter table public.store_settings add constraint store_settings_orders_per_day_check check (orders_per_day between 1 and 500);
+  end if;
+end $$;
 
 create index if not exists idx_products_category_active on public.products(category_id, active);
 create index if not exists idx_orders_pickup_slot on public.orders(pickup_date, pickup_time) where status <> 'cancelled';
@@ -103,6 +139,11 @@ create index if not exists idx_order_items_order on public.order_items(order_id)
 create index if not exists idx_order_items_product_id on public.order_items(product_id);
 create index if not exists idx_orders_customer_id on public.orders(customer_id);
 create index if not exists idx_orders_user_created on public.orders(user_id, created_at desc) where user_id is not null;
+create unique index if not exists idx_orders_payment_reference on public.orders(payment_reference);
+create unique index if not exists idx_orders_payment_idempotency on public.orders(payment_idempotency_key) where payment_idempotency_key is not null;
+create unique index if not exists idx_orders_provider_order on public.orders(payment_provider_order_id) where payment_provider_order_id is not null;
+create index if not exists idx_orders_payment_status_created on public.orders(payment_status, created_at desc);
+create index if not exists idx_orders_pickup_day_active on public.orders(pickup_date, payment_status) where payment_status in ('legacy','pending','paid');
 
 insert into public.store_settings (id) values (1) on conflict (id) do nothing;
 insert into public.categories (name, slug, sort_order) values
@@ -122,6 +163,178 @@ from (values
 ) as v(category_slug,name,description,price,image_url,options,featured,sort_order)
 join public.categories c on c.slug = v.category_slug
 where not exists (select 1 from public.products);
+
+create or replace function public.create_pix_checkout(
+  p_request_id uuid, p_user_id uuid, p_customer_name text, p_email text,
+  p_phone text, p_pickup_date date, p_notes text, p_items jsonb
+) returns jsonb language plpgsql security definer set search_path = '' as $$
+declare
+  v_settings public.store_settings%rowtype;
+  v_customer_id bigint;
+  v_order_id bigint;
+  v_total numeric(10,2);
+  v_extras numeric(10,2);
+  v_result jsonb;
+  v_requested_count integer;
+  v_valid_count integer;
+  v_phone text := regexp_replace(coalesce(p_phone, ''), '[^0-9]', '', 'g');
+  v_email text := lower(trim(coalesce(p_email, '')));
+  v_now timestamp := now() at time zone 'America/Sao_Paulo';
+begin
+  if (select auth.role()) <> 'service_role' then raise exception 'Acesso restrito.' using errcode = '42501'; end if;
+  if p_request_id is null
+    or char_length(trim(coalesce(p_customer_name, ''))) not between 3 and 100
+    or char_length(v_email) not between 5 and 200
+    or position('@' in v_email) < 2
+    or char_length(v_phone) not between 8 and 15
+    or char_length(coalesce(p_notes, '')) > 500
+    or p_items is null
+    or jsonb_typeof(p_items) <> 'array'
+    or jsonb_array_length(p_items) not between 1 and 40
+  then
+    raise exception 'Revise os dados do pedido.';
+  end if;
+
+  perform pg_advisory_xact_lock(hashtextextended(p_request_id::text, 0));
+  select to_jsonb(o.*) || jsonb_build_object(
+    'order_items', coalesce(jsonb_agg(to_jsonb(oi.*)) filter (where oi.id is not null), '[]'::jsonb)
+  ) into v_result
+  from public.orders o
+  left join public.order_items oi on oi.order_id = o.id
+  where o.payment_idempotency_key = p_request_id
+  group by o.id;
+  if v_result is not null then return v_result; end if;
+
+  if exists (
+    select 1 from jsonb_array_elements(p_items) item
+    where not coalesce((item->>'product_id') ~ '^[1-9][0-9]*$', false)
+      or not coalesce((item->>'quantity') ~ '^[1-9][0-9]*$', false)
+      or (item->>'quantity')::integer not between 1 and 30
+      or jsonb_typeof(coalesce(item->'options', '[]'::jsonb)) <> 'array'
+      or jsonb_array_length(coalesce(item->'options', '[]'::jsonb)) > 20
+      or char_length(coalesce(item->>'notes', '')) > 300
+  ) then raise exception 'Revise os itens do pedido.'; end if;
+
+  select * into v_settings from public.store_settings where id = 1;
+  if not found then raise exception 'A loja ainda não está configurada.'; end if;
+  if p_pickup_date < v_now::date or p_pickup_date > v_now::date + 180 then raise exception 'Escolha uma data de retirada válida.'; end if;
+  if extract(dow from p_pickup_date)::smallint = any(v_settings.closed_days) then raise exception 'A loja não atende nesta data.'; end if;
+  if p_pickup_date = v_now::date and v_now + make_interval(mins => v_settings.prep_minutes) > p_pickup_date + v_settings.close_time then
+    raise exception 'O prazo de preparo de hoje já encerrou. Escolha outra data.';
+  end if;
+  if (select count(*) from public.orders where phone = v_phone and created_at > now() - interval '10 minutes' and payment_status in ('pending','paid')) >= 5 then
+    raise exception 'Aguarde alguns minutos antes de gerar outro pagamento.';
+  end if;
+
+  perform pg_advisory_xact_lock(hashtextextended(p_pickup_date::text, 0));
+  if (
+    select count(*) from public.orders
+    where pickup_date = p_pickup_date
+      and status <> 'cancelled'
+      and (payment_status in ('legacy','paid') or (payment_status = 'pending' and payment_expires_at > now()))
+  ) >= v_settings.orders_per_day then
+    raise exception 'Esta data atingiu o limite de encomendas. Escolha outro dia.';
+  end if;
+
+  select count(*), count(p.id), coalesce(sum(p.price * (item->>'quantity')::integer), 0)
+  into v_requested_count, v_valid_count, v_total
+  from jsonb_array_elements(p_items) item
+  left join public.products p on p.id = (item->>'product_id')::bigint and p.active and not p.sold_out;
+  if v_requested_count <> v_valid_count then raise exception 'Um item do carrinho não está mais disponível.'; end if;
+
+  if exists (
+    select 1
+    from jsonb_array_elements(p_items) item
+    join public.products p on p.id = (item->>'product_id')::bigint
+    where jsonb_array_length(coalesce(item->'options', '[]'::jsonb)) <> (
+      select count(distinct chosen.value)
+      from jsonb_array_elements_text(coalesce(item->'options', '[]'::jsonb)) chosen(value)
+    )
+    or exists (
+      select 1
+      from jsonb_array_elements(coalesce(p.options, '[]'::jsonb)) option_group
+      where (
+        select count(*)
+        from jsonb_array_elements_text(coalesce(item->'options', '[]'::jsonb)) chosen(value)
+        where exists (
+          select 1
+          from jsonb_array_elements(coalesce(option_group->'values', '[]'::jsonb)) choice
+          where chosen.value = option_group->>'name' || ': ' || case when jsonb_typeof(choice) = 'string' then choice #>> '{}' else choice->>'name' end
+        )
+      ) not between
+        case
+          when coalesce(option_group->>'minSelections', '') ~ '^[0-9]+$' then least(20, (option_group->>'minSelections')::integer)
+          when option_group->>'kind' = 'addon' then 0
+          when coalesce(option_group->>'selectionCount', '') ~ '^[1-9][0-9]*$' then least(20, (option_group->>'selectionCount')::integer)
+          else 1
+        end
+      and case
+        when coalesce(option_group->>'maxSelections', '') ~ '^[1-9][0-9]*$' then least(20, (option_group->>'maxSelections')::integer)
+        when coalesce(option_group->>'selectionCount', '') ~ '^[1-9][0-9]*$' then least(20, (option_group->>'selectionCount')::integer)
+        else 1
+      end
+    )
+    or exists (
+      select 1
+      from jsonb_array_elements_text(coalesce(item->'options', '[]'::jsonb)) chosen(value)
+      where not exists (
+        select 1
+        from jsonb_array_elements(coalesce(p.options, '[]'::jsonb)) option_group
+        cross join jsonb_array_elements(coalesce(option_group->'values', '[]'::jsonb)) choice
+        where chosen.value = option_group->>'name' || ': ' || case when jsonb_typeof(choice) = 'string' then choice #>> '{}' else choice->>'name' end
+      )
+    )
+  ) then raise exception 'Escolha corretamente todas as opções do produto.'; end if;
+
+  select coalesce(sum(
+    (item->>'quantity')::integer * case
+      when jsonb_typeof(choice) = 'object' and coalesce(choice->>'priceDelta', '') ~ '^[0-9]+([.][0-9]+)?$'
+        then least(10000, (choice->>'priceDelta')::numeric)
+      else 0
+    end
+  ), 0)
+  into v_extras
+  from jsonb_array_elements(p_items) item
+  join public.products p on p.id = (item->>'product_id')::bigint
+  cross join lateral jsonb_array_elements_text(coalesce(item->'options', '[]'::jsonb)) chosen(value)
+  join lateral jsonb_array_elements(coalesce(p.options, '[]'::jsonb)) option_group on true
+  join lateral jsonb_array_elements(coalesce(option_group->'values', '[]'::jsonb)) choice
+    on chosen.value = option_group->>'name' || ': ' || case when jsonb_typeof(choice) = 'string' then choice #>> '{}' else choice->>'name' end;
+  v_total := v_total + v_extras;
+
+  insert into public.customers (name, phone) values (trim(p_customer_name), v_phone)
+  on conflict (phone) do update set name = excluded.name, updated_at = now() returning id into v_customer_id;
+  insert into public.orders (
+    order_number, user_id, customer_id, customer_name, phone, customer_email,
+    pickup_date, pickup_time, notes, payment_method, payment_status, payment_provider,
+    payment_reference, payment_idempotency_key, payment_expires_at, total
+  ) values (
+    p_request_id::text, p_user_id, v_customer_id, trim(p_customer_name), v_phone, v_email,
+    p_pickup_date, null, coalesce(trim(p_notes), ''), 'PIX', 'pending', 'mercado_pago',
+    p_request_id, p_request_id, now() + interval '30 minutes', v_total
+  ) returning id into v_order_id;
+
+  insert into public.order_items (order_id, product_id, product_name, quantity, unit_price, options, notes)
+  select v_order_id, p.id, p.name, (item->>'quantity')::integer, p.price + coalesce((
+    select sum(case when jsonb_typeof(choice) = 'object' and coalesce(choice->>'priceDelta', '') ~ '^[0-9]+([.][0-9]+)?$' then least(10000, (choice->>'priceDelta')::numeric) else 0 end)
+    from jsonb_array_elements_text(coalesce(item->'options', '[]'::jsonb)) chosen(value)
+    join lateral jsonb_array_elements(coalesce(p.options, '[]'::jsonb)) option_group on true
+    join lateral jsonb_array_elements(coalesce(option_group->'values', '[]'::jsonb)) choice
+      on chosen.value = option_group->>'name' || ': ' || case when jsonb_typeof(choice) = 'string' then choice #>> '{}' else choice->>'name' end
+  ), 0), coalesce(item->'options', '[]'::jsonb), trim(coalesce(item->>'notes', ''))
+  from jsonb_array_elements(p_items) item join public.products p on p.id = (item->>'product_id')::bigint;
+
+  select to_jsonb(o.*) || jsonb_build_object(
+    'order_items', coalesce(jsonb_agg(to_jsonb(oi.*)) filter (where oi.id is not null), '[]'::jsonb)
+  ) into v_result
+  from public.orders o left join public.order_items oi on oi.order_id = o.id
+  where o.id = v_order_id group by o.id;
+  return v_result;
+end;
+$$;
+
+revoke all on function public.create_pix_checkout(uuid,uuid,text,text,text,date,text,jsonb) from public, anon, authenticated;
+grant execute on function public.create_pix_checkout(uuid,uuid,text,text,text,date,text,jsonb) to service_role;
 
 create or replace function public.create_pickup_order(
   p_customer_name text, p_phone text, p_pickup_date date, p_pickup_time time,
@@ -266,7 +479,6 @@ end;
 $$;
 
 revoke all on function public.create_pickup_order(text,text,date,time,text,text,jsonb) from public, anon, authenticated;
-grant execute on function public.create_pickup_order(text,text,date,time,text,text,jsonb) to anon, authenticated, service_role;
 
 create or replace function public.get_pickup_order(p_order_number text, p_phone text)
 returns jsonb language sql stable security definer set search_path = '' as $$
@@ -279,6 +491,7 @@ returns jsonb language sql stable security definer set search_path = '' as $$
   left join public.order_items oi on oi.order_id = o.id
   where o.order_number = trim(p_order_number)
     and o.phone = regexp_replace(coalesce(p_phone, ''), '[^0-9]', '', 'g')
+    and o.payment_status in ('legacy', 'paid', 'refunded')
     and char_length(trim(coalesce(p_order_number, ''))) between 3 and 40
     and char_length(regexp_replace(coalesce(p_phone, ''), '[^0-9]', '', 'g')) between 8 and 15
   group by o.id;
@@ -364,13 +577,13 @@ create policy "admins read own row" on public.admins for select to authenticated
 drop policy if exists "admins read orders" on public.orders;
 drop policy if exists "customers read own orders" on public.orders;
 drop policy if exists "authorized read orders" on public.orders;
-create policy "authorized read orders" on public.orders for select to authenticated using ((select private.is_admin()) or (select auth.uid()) = user_id);
+create policy "authorized read orders" on public.orders for select to authenticated using ((select private.is_admin()) or ((select auth.uid()) = user_id and payment_status in ('legacy', 'paid', 'refunded')));
 drop policy if exists "admins update orders" on public.orders;
 create policy "admins update orders" on public.orders for update to authenticated using ((select private.is_admin())) with check ((select private.is_admin()));
 drop policy if exists "admins read order items" on public.order_items;
 drop policy if exists "customers read own order items" on public.order_items;
 drop policy if exists "authorized read order items" on public.order_items;
-create policy "authorized read order items" on public.order_items for select to authenticated using ((select private.is_admin()) or exists (select 1 from public.orders where orders.id = order_items.order_id and orders.user_id = (select auth.uid())));
+create policy "authorized read order items" on public.order_items for select to authenticated using ((select private.is_admin()) or exists (select 1 from public.orders where orders.id = order_items.order_id and orders.user_id = (select auth.uid()) and orders.payment_status in ('legacy', 'paid', 'refunded')));
 
 drop policy if exists "customers read own profile" on public.customer_profiles;
 create policy "customers read own profile" on public.customer_profiles for select to authenticated using ((select auth.uid()) = user_id);
