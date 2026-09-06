@@ -26,11 +26,11 @@ Em **Project Settings > API**, copie a URL, a chave pública e uma chave secreta
 
 ```env
 NEXT_PUBLIC_SUPABASE_URL=https://SEU-PROJETO.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=sua-chave-publica
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_sua-chave-publica
 SUPABASE_SECRET_KEY=sua-chave-secreta
 ```
 
-`SUPABASE_SECRET_KEY` é usada apenas nas rotas do servidor para criar cobranças pendentes com segurança. Nunca use essa chave em uma variável `NEXT_PUBLIC_*` nem no navegador. Projetos que ainda usam a chave legada podem configurar `SUPABASE_SERVICE_ROLE_KEY` como alternativa.
+`SUPABASE_SECRET_KEY` é usada apenas nas rotas do servidor para criar cobranças pendentes com segurança. Nunca use essa chave em uma variável `NEXT_PUBLIC_*` nem no navegador. A aplicação ainda aceita temporariamente `NEXT_PUBLIC_SUPABASE_ANON_KEY` e `SUPABASE_SERVICE_ROLE_KEY` em projetos antigos, mas as chaves novas são preferidas.
 
 ## 3. Deixar o PIX preparado, mas desligado
 
@@ -81,7 +81,7 @@ Painel: `http://localhost:3000/admin`
 2. Configure abertura, fechamento, antecedência e limite diário.
 3. Revise preços, descrições, categorias, combos e adicionais.
 4. Envie as fotos reais pela galeria do celular ou computador.
-5. Ative o som e use **Testar alarme**.
+5. Ative o som e use **Testar novo alarme**. O toque se repete até o pedido ser aceito.
 6. Use **Instalar painel** dentro da área autenticada no celular da proprietária.
 
 ## Banco de dados
