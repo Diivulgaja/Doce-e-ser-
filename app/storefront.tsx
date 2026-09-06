@@ -23,6 +23,16 @@ const statusLabels: Record<string, string> = { received: "Pedido recebido", conf
 const primaryButton = "rounded-full bg-gradient-to-r from-[#4a2110] via-[#6b351b] to-[#4a2110] font-semibold text-[#fff8ed] shadow-[0_10px_28px_rgba(74,33,16,.24)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_14px_34px_rgba(74,33,16,.32)] active:translate-y-0";
 const secondaryButton = "rounded-full border border-[#8b674e]/30 bg-white/80 font-semibold text-[#512b18] shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-[#8b674e]/50 hover:bg-white hover:shadow-md active:translate-y-0";
 
+function authErrorMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  const normalized = message.toLowerCase();
+  if (normalized.includes("email not confirmed")) return "Confirme seu e-mail antes de entrar. Você pode reenviar o link abaixo.";
+  if (normalized.includes("invalid login credentials")) return "E-mail ou senha incorretos.";
+  if (normalized.includes("user already registered")) return "Já existe uma conta com este e-mail. Use a opção Entrar.";
+  if (normalized.includes("rate limit") || normalized.includes("email rate limit")) return "Aguarde alguns minutos antes de solicitar outro e-mail.";
+  return "Não foi possível acessar a conta agora. Tente novamente.";
+}
+
 export default function Storefront() {
   const supabase = useMemo(() => getSupabaseBrowser(), []);
   const [catalog, setCatalog] = useState<Catalog | null>(null);
@@ -432,6 +442,10 @@ function TrackingDialog({ open, onOpenChange, order, onOrder, session, onAccount
       try {
         const response = await fetch("/api/orders", { cache: "no-store", headers: { authorization: `Bearer ${session.access_token}` } });
         const data = await response.json();
+        if (response.status === 401) {
+          await getSupabaseBrowser()?.auth.signOut({ scope: "local" });
+          throw new Error("Sua sessão expirou. Entre novamente para ver os pedidos.");
+        }
         if (!response.ok) throw new Error(data.error);
         if (active) setOrders(data.orders ?? []);
       } catch (error) { if (active) toast.error(error instanceof Error ? error.message : "Não foi possível carregar seus pedidos."); }
@@ -451,6 +465,25 @@ function AccountDialog({ open, onOpenChange, session, profile }: { open: boolean
   const supabase = useMemo(() => getSupabaseBrowser(), []);
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [loading, setLoading] = useState(false);
+  const [unconfirmedEmail, setUnconfirmedEmail] = useState("");
+
+  async function resendConfirmation() {
+    if (!supabase || !unconfirmedEmail) return;
+    setLoading(true);
+    try {
+      const { error } = await supabase.auth.resend({
+        type: "signup",
+        email: unconfirmedEmail,
+        options: { emailRedirectTo: window.location.origin },
+      });
+      if (error) throw error;
+      toast.success("Novo e-mail de confirmação enviado. Verifique também a caixa de spam.", { duration: 8000 });
+    } catch (error) {
+      toast.error(authErrorMessage(error), { duration: 7000 });
+    } finally {
+      setLoading(false);
+    }
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -463,19 +496,23 @@ function AccountDialog({ open, onOpenChange, session, profile }: { open: boolean
       if (mode === "signup") {
         const fullName = String(form.get("name") ?? "").trim();
         const phone = String(form.get("phone") ?? "").replace(/\D/g, "");
-        const { data, error } = await supabase.auth.signUp({ email, password, options: { data: { full_name: fullName, phone } } });
+        const { data, error } = await supabase.auth.signUp({ email, password, options: { data: { full_name: fullName, phone }, emailRedirectTo: window.location.origin } });
         if (error) throw error;
         if (data.session) { toast.success("Conta criada. Seus próximos pedidos serão salvos aqui."); onOpenChange(false); }
-        else { toast.success("Conta criada! Confirme o e-mail recebido para entrar.", { duration: 7000 }); setMode("login"); }
+        else { setUnconfirmedEmail(email); toast.success("Conta criada! Confirme o e-mail recebido para entrar.", { duration: 7000 }); setMode("login"); }
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
-        if (error) throw error;
+        if (error) {
+          if (error.message.toLowerCase().includes("email not confirmed")) setUnconfirmedEmail(email);
+          throw error;
+        }
         toast.success("Bem-vindo de volta!");
+        setUnconfirmedEmail("");
         onOpenChange(false);
       }
-    } catch (error) { toast.error(error instanceof Error ? error.message : "Não foi possível acessar a conta."); }
+    } catch (error) { toast.error(authErrorMessage(error), { duration: 7000 }); }
     finally { setLoading(false); }
   }
 
-  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="max-h-[92vh] overflow-y-auto rounded-3xl bg-[#fffaf4] sm:max-w-md">{session ? <div className="space-y-5 text-center"><span className="mx-auto grid size-16 place-items-center rounded-full bg-[#f2e4d2]"><UserRound className="size-7" /></span><DialogHeader><DialogTitle className="text-center font-serif text-3xl">{profile?.name || "Minha conta"}</DialogTitle><DialogDescription className="text-center">Seus pedidos ficam protegidos e disponíveis em qualquer aparelho.</DialogDescription></DialogHeader><Button variant="outline" onClick={() => supabase?.auth.signOut()} className={`w-full ${secondaryButton}`}><LogOut className="size-4" /> Sair da conta</Button></div> : <><DialogHeader><DialogTitle className="font-serif text-3xl">{mode === "login" ? "Entrar na conta" : "Criar minha conta"}</DialogTitle><DialogDescription>{mode === "login" ? "Acesse todo o seu histórico de pedidos." : "Seus próximos pedidos ficarão salvos em qualquer aparelho."}</DialogDescription></DialogHeader><div className="grid grid-cols-2 rounded-full bg-[#eee5dc] p-1 text-sm font-semibold"><button type="button" onClick={() => setMode("login")} className={`rounded-full px-4 py-2.5 transition ${mode === "login" ? "bg-white shadow-sm" : "text-[#806b5d]"}`}>Entrar</button><button type="button" onClick={() => setMode("signup")} className={`rounded-full px-4 py-2.5 transition ${mode === "signup" ? "bg-white shadow-sm" : "text-[#806b5d]"}`}>Criar conta</button></div><form onSubmit={submit} className="space-y-4">{mode === "signup" && <><label className="grid gap-2"><span className="font-medium">Nome completo</span><Input name="name" autoComplete="name" minLength={2} required /></label><label className="grid gap-2"><span className="font-medium">Telefone / WhatsApp</span><Input name="phone" inputMode="tel" autoComplete="tel" minLength={8} required /></label></>}<label className="grid gap-2"><span className="font-medium">E-mail</span><Input type="email" name="email" autoComplete="email" required /></label><label className="grid gap-2"><span className="font-medium">Senha</span><Input type="password" name="password" autoComplete={mode === "login" ? "current-password" : "new-password"} minLength={6} required /><small className="text-[#806b5d]">Mínimo de 6 caracteres.</small></label><Button disabled={loading} className={`h-12 w-full ${primaryButton}`}>{loading ? "Aguarde…" : mode === "login" ? "Entrar" : "Criar conta"}</Button></form></>}</DialogContent></Dialog>;
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="max-h-[92vh] overflow-y-auto rounded-3xl bg-[#fffaf4] sm:max-w-md">{session ? <div className="space-y-5 text-center"><span className="mx-auto grid size-16 place-items-center rounded-full bg-[#f2e4d2]"><UserRound className="size-7" /></span><DialogHeader><DialogTitle className="text-center font-serif text-3xl">{profile?.name || "Minha conta"}</DialogTitle><DialogDescription className="text-center">Seus pedidos ficam protegidos e disponíveis em qualquer aparelho.</DialogDescription></DialogHeader><Button variant="outline" onClick={() => supabase?.auth.signOut()} className={`w-full ${secondaryButton}`}><LogOut className="size-4" /> Sair da conta</Button></div> : <><DialogHeader><DialogTitle className="font-serif text-3xl">{mode === "login" ? "Entrar na conta" : "Criar minha conta"}</DialogTitle><DialogDescription>{mode === "login" ? "Acesse todo o seu histórico de pedidos." : "Seus próximos pedidos ficarão salvos em qualquer aparelho."}</DialogDescription></DialogHeader><div className="grid grid-cols-2 rounded-full bg-[#eee5dc] p-1 text-sm font-semibold"><button type="button" onClick={() => setMode("login")} className={`rounded-full px-4 py-2.5 transition ${mode === "login" ? "bg-white shadow-sm" : "text-[#806b5d]"}`}>Entrar</button><button type="button" onClick={() => { setMode("signup"); setUnconfirmedEmail(""); }} className={`rounded-full px-4 py-2.5 transition ${mode === "signup" ? "bg-white shadow-sm" : "text-[#806b5d]"}`}>Criar conta</button></div>{unconfirmedEmail && mode === "login" && <div className="rounded-2xl border border-[#d9b67e]/40 bg-[#fff4dc] p-4 text-sm text-[#6b431f]"><div className="flex gap-3"><span className="grid size-9 shrink-0 place-items-center rounded-full bg-white"><AtSign className="size-4" /></span><div><strong className="block">Falta confirmar seu e-mail</strong><p className="mt-1 leading-5">Abra o link enviado para <span className="font-semibold">{unconfirmedEmail}</span>. Verifique também a caixa de spam.</p></div></div><Button type="button" variant="outline" onClick={resendConfirmation} disabled={loading} className={`mt-3 w-full ${secondaryButton}`}>{loading ? "Enviando…" : "Reenviar e-mail de confirmação"}</Button></div>}<form onSubmit={submit} className="space-y-4">{mode === "signup" && <><label className="grid gap-2"><span className="font-medium">Nome completo</span><Input name="name" autoComplete="name" minLength={2} required /></label><label className="grid gap-2"><span className="font-medium">Telefone / WhatsApp</span><Input name="phone" inputMode="tel" autoComplete="tel" minLength={8} required /></label></>}<label className="grid gap-2"><span className="font-medium">E-mail</span><Input type="email" name="email" autoComplete="email" defaultValue={unconfirmedEmail} required /></label><label className="grid gap-2"><span className="font-medium">Senha</span><Input type="password" name="password" autoComplete={mode === "login" ? "current-password" : "new-password"} minLength={6} required /><small className="text-[#806b5d]">Mínimo de 6 caracteres.</small></label><Button disabled={loading} className={`h-12 w-full ${primaryButton}`}>{loading ? "Aguarde…" : mode === "login" ? "Entrar" : "Criar conta"}</Button></form></>}</DialogContent></Dialog>;
 }
