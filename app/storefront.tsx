@@ -179,21 +179,27 @@ export default function Storefront() {
       </header>
 
       <main>
-        <section id="inicio" className="relative overflow-hidden border-b border-[#6a3d24]/10">
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_90%_10%,#eed3aa_0,transparent_35%),radial-gradient(circle_at_10%_90%,#ead8c3_0,transparent_28%)]" />
-          <div className="relative mx-auto grid max-w-7xl items-center gap-10 px-4 py-12 sm:px-6 sm:py-16 lg:grid-cols-[1fr_.82fr] lg:py-20">
-            <div>
-              <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-[#be9b73]/40 bg-white/55 px-3 py-2 text-sm text-[#75513b]"><Store className="size-4" /> Pedidos somente para retirada</div>
-              <h1 className="max-w-3xl font-serif text-5xl leading-[.98] tracking-[-.035em] text-[#4e2715] sm:text-7xl">Um doce momento para chamar de seu.</h1>
-              <p className="mt-6 max-w-xl text-lg leading-8 text-[#765846]">Doces e bolos artesanais, preparados com carinho para você retirar na nossa loja.</p>
-              <div className="mt-8 flex flex-wrap gap-3"><Button asChild size="lg" className={`h-13 px-7 text-base ${primaryButton}`}><a href="#cardapio">Ver cardápio <ChevronRight /></a></Button><Button variant="outline" size="lg" onClick={() => setTracking(true)} className={`h-13 px-7 text-base ${secondaryButton}`}>Acompanhar pedido</Button></div>
-              <div className="mt-7 flex max-w-2xl flex-wrap gap-2 text-xs font-semibold text-[#684430]">
-                <span className="inline-flex items-center gap-1.5 rounded-full border border-[#a98264]/20 bg-white/60 px-3 py-2"><Check className="size-3.5 text-[#477444]" /> Avisamos quando ficar pronto</span>
-                <span className="inline-flex items-center gap-1.5 rounded-full border border-[#a98264]/20 bg-white/60 px-3 py-2"><ShieldCheck className="size-3.5 text-[#8b5d3d]" /> Pagamento seguro via PIX</span>
-                <span className="inline-flex items-center gap-1.5 rounded-full border border-[#a98264]/20 bg-white/60 px-3 py-2"><Sparkles className="size-3.5 text-[#a16e48]" /> Feito artesanalmente</span>
+        <section id="inicio" className="relative overflow-hidden border-b border-[#6a3d24]/10 bg-[#f9f2e8]">
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_88%_12%,#efc982_0,transparent_32%),radial-gradient(circle_at_7%_88%,#e5cbb3_0,transparent_30%)] opacity-70" />
+          <div className="absolute -right-20 top-24 size-72 rounded-full border border-[#9c6744]/10" />
+          <div className="absolute -right-4 top-40 size-44 rounded-full border border-[#9c6744]/10" />
+          <div className="relative mx-auto grid max-w-7xl items-center gap-12 px-4 py-12 sm:px-6 sm:py-16 lg:grid-cols-[1.05fr_.78fr] lg:py-20">
+            <div className="relative z-10">
+              <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-[#9b6b4b]/20 bg-white/75 px-4 py-2 text-sm font-semibold text-[#75513b] shadow-sm backdrop-blur"><Store className="size-4 text-[#8b4d2c]" /> Encomende online e retire na loja</div>
+              <h1 className="max-w-3xl font-serif text-5xl leading-[.96] tracking-[-.04em] text-[#4e2715] sm:text-7xl">Seu momento merece um toque <span className="relative whitespace-nowrap text-[#8b4d2c]">mais doce<span className="absolute -bottom-1 left-0 h-1 w-full rounded-full bg-[#d7a15f]/55" /></span>.</h1>
+              <p className="mt-6 max-w-xl text-lg leading-8 text-[#765846]">Escolha seus doces favoritos, pague com PIX e retire tudo fresquinho na Doce é Ser.</p>
+              <div className="mt-8 flex flex-col gap-3 sm:flex-row"><Button asChild size="lg" className={`h-14 px-8 text-base ${primaryButton}`}><a href="#cardapio">Escolher meus doces <ChevronRight /></a></Button><Button variant="outline" size="lg" onClick={() => setTracking(true)} className={`h-14 px-7 text-base ${secondaryButton}`}>Acompanhar pedido</Button></div>
+              <div className="mt-8 grid max-w-2xl gap-2.5 sm:grid-cols-3">
+                <div className="flex items-center gap-3 rounded-2xl border border-[#a98264]/15 bg-white/65 p-3 shadow-sm backdrop-blur"><span className="grid size-9 shrink-0 place-items-center rounded-full bg-[#f2e4d2] font-serif text-lg text-[#6b351b]">1</span><span className="text-sm font-semibold leading-tight text-[#684430]">Escolha no cardápio</span></div>
+                <div className="flex items-center gap-3 rounded-2xl border border-[#a98264]/15 bg-white/65 p-3 shadow-sm backdrop-blur"><span className="grid size-9 shrink-0 place-items-center rounded-full bg-[#f2e4d2] font-serif text-lg text-[#6b351b]">2</span><span className="text-sm font-semibold leading-tight text-[#684430]">Pague com PIX</span></div>
+                <div className="flex items-center gap-3 rounded-2xl border border-[#a98264]/15 bg-white/65 p-3 shadow-sm backdrop-blur"><span className="grid size-9 shrink-0 place-items-center rounded-full bg-[#e7efe2] text-[#477444]"><Check className="size-4" /></span><span className="text-sm font-semibold leading-tight text-[#684430]">Retire após o aviso</span></div>
               </div>
             </div>
-            <div className="relative mx-auto aspect-square w-full max-w-[470px] overflow-hidden rounded-[2.5rem] border-8 border-white/60 shadow-2xl shadow-[#6b3a20]/15"><ProductImage src="sprite:0" alt="Fatia de bolo de chocolate" className="absolute inset-0 h-full w-full" /><div className="absolute bottom-4 left-4 right-4 rounded-2xl bg-[#fffaf4]/90 p-4 backdrop-blur"><p className="text-xs font-semibold uppercase tracking-[.18em] text-[#9b6f4f]">Feito artesanalmente</p><p className="mt-1 font-serif text-xl">Chocolate, afeto e bons ingredientes.</p></div></div>
+            <div className="relative mx-auto w-full max-w-[500px] lg:justify-self-end">
+              <div className="absolute -left-5 top-10 z-10 hidden items-center gap-2 rounded-full border border-white/70 bg-[#fffaf4]/90 px-4 py-2 text-sm font-semibold text-[#63351e] shadow-xl backdrop-blur sm:flex"><Sparkles className="size-4 text-[#a16e48]" /> Feito artesanalmente</div>
+              <div className="relative aspect-[.94] overflow-hidden rounded-[2.75rem] border-[10px] border-white/65 shadow-[0_28px_70px_rgba(80,40,18,.22)]"><ProductImage src="sprite:0" alt="Fatia de bolo de chocolate artesanal" className="absolute inset-0 h-full w-full transition duration-700 hover:scale-[1.025]" /><div className="absolute inset-x-4 bottom-4 rounded-[1.4rem] border border-white/60 bg-[#fffaf4]/92 p-4 shadow-lg backdrop-blur"><p className="text-xs font-semibold uppercase tracking-[.18em] text-[#9b6f4f]">Doce é Ser</p><p className="mt-1 font-serif text-xl leading-tight">Chocolate, afeto e bons ingredientes.</p></div></div>
+              <div className="absolute -bottom-4 right-5 flex items-center gap-3 rounded-2xl border border-white/70 bg-[#fffaf4]/95 px-4 py-3 text-sm shadow-xl backdrop-blur"><span className="grid size-9 place-items-center rounded-full bg-[#e7efe2] text-[#477444]"><Store className="size-4" /></span><span><strong className="block text-[#4e2715]">Somente retirada</strong><small className="text-[#806b5d]">Você escolhe a data</small></span></div>
+            </div>
           </div>
         </section>
 
